@@ -15,6 +15,7 @@ This is a monorepo containing a real-time collaborative whiteboard. It features 
 2. **NO FIREBASE DATABASE:** We only use Firebase for static frontend hosting. All real-time WebSocket sync and data storage MUST use Cloudflare Durable Objects with the SQLite backend.
 3. **USE ZOD FOR EVERYTHING:** All `tldraw` shapes and AI JSON outputs must be strictly validated using `zod` schemas in a `shared/` directory. Do not trust raw LLM outputs.
 4. **SECURE THE AI:** The Anthropic API is only called from the Cloudflare Worker. The Worker must verify the user's Clerk JWT before executing the LLM call.
+5. **NO VERSION CONTROL:** Do not run git commits, branch creations, or pushes. The user will handle all Git operations manually.
 
 ## Structure
 
