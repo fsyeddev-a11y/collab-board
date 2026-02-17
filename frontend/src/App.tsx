@@ -21,10 +21,11 @@ interface ConnectedUser {
 }
 
 function App() {
-  // Clerk authentication hooks
+  // Clerk authentication hooks - MUST be called unconditionally
   const { isSignedIn, user, isLoaded } = useUser();
   const { getToken } = useAuth();
 
+  // All other hooks - MUST be called unconditionally
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
   const [isPresenceExpanded, setIsPresenceExpanded] = useState(false);
@@ -38,42 +39,10 @@ function App() {
   const MAX_VISIBLE_USERS = 5;
   const MAX_RECONNECT_DELAY = 5000; // Max 5 seconds between reconnection attempts
 
-  // Show loading state while Clerk is initializing
-  if (!isLoaded) {
-    return (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100vh',
-        background: '#f5f5f5'
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '18px', color: '#666' }}>Loading...</div>
-        </div>
-      </div>
-    );
-  }
-
-  // Show sign-in UI for unauthenticated users
-  if (!isSignedIn) {
-    return (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100vh',
-        background: '#f5f5f5'
-      }}>
-        <SignIn routing="hash" />
-      </div>
-    );
-  }
-
-  // Get authenticated user info
-  const USER_ID = user.id;
-  const USER_NAME = user.fullName || user.username || user.emailAddresses[0]?.emailAddress || 'Anonymous';
-  const USER_COLOR = getUserColor(USER_ID);
+  // Get authenticated user info (only when signed in)
+  const USER_ID = isSignedIn && user ? user.id : '';
+  const USER_NAME = isSignedIn && user ? (user.fullName || user.username || user.emailAddresses[0]?.emailAddress || 'Anonymous') : '';
+  const USER_COLOR = USER_ID ? getUserColor(USER_ID) : '#666';
 
   // WebSocket connection function
   const connectWebSocket = async () => {
@@ -88,6 +57,24 @@ function App() {
       wsRef.current = null;
     }
 
+    // Get FRESH JWT token BEFORE connecting (important for reconnections)
+    console.log('[WS] Getting fresh authentication token...');
+    let token: string | null = null;
+    try {
+      // Force a fresh token by passing { skipCache: true }
+      token = await getToken({ skipCache: true });
+      if (!token) {
+        console.error('[WS] Failed to get authentication token');
+        setConnectionStatus('disconnected');
+        return;
+      }
+      console.log('[WS] Fresh token obtained successfully');
+    } catch (error) {
+      console.error('[WS] Error getting token:', error);
+      setConnectionStatus('disconnected');
+      return;
+    }
+
     const boardId = 'default-board';
     const wsUrl = import.meta.env.VITE_BACKEND_WS_URL || 'ws://localhost:8787';
     const fullWsUrl = `${wsUrl}/board/${boardId}/ws`;
@@ -98,35 +85,21 @@ function App() {
     const websocket = new WebSocket(fullWsUrl);
     wsRef.current = websocket;
 
-    websocket.onopen = async () => {
-      console.log('[WS] Connected');
+    websocket.onopen = () => {
+      console.log('[WS] WebSocket opened');
       setConnectionStatus('connected');
       reconnectAttemptsRef.current = 0; // Reset reconnection attempts
 
-      try {
-        // Get Clerk JWT token
-        const token = await getToken();
+      console.log('[WS] Sending authenticated connect message');
 
-        if (!token) {
-          console.error('[WS] Failed to get authentication token');
-          websocket.close();
-          return;
-        }
-
-        console.log('[WS] Sending authenticated connect message');
-
-        // Send initial connect message with JWT
-        websocket.send(JSON.stringify({
-          type: 'connect',
-          userId: USER_ID,
-          userName: USER_NAME,
-          userColor: USER_COLOR,
-          token, // Include JWT for backend verification
-        }));
-      } catch (error) {
-        console.error('[WS] Error getting token:', error);
-        websocket.close();
-      }
+      // Send initial connect message with JWT (already obtained)
+      websocket.send(JSON.stringify({
+        type: 'connect',
+        userId: USER_ID,
+        userName: USER_NAME,
+        userColor: USER_COLOR,
+        token, // Include JWT for backend verification
+      }));
     };
 
     websocket.onclose = (event) => {
@@ -365,8 +338,15 @@ function App() {
 
   };
 
-  // Connect to WebSocket on mount and handle cleanup
+  // Connect to WebSocket when authenticated
   useEffect(() => {
+    // Only connect if user is signed in and has user data
+    if (!isSignedIn || !USER_ID) {
+      console.log('[WS] Skipping connection - user not authenticated');
+      return;
+    }
+
+    console.log('[WS] User authenticated, connecting...');
     connectWebSocket();
 
     return () => {
@@ -390,10 +370,16 @@ function App() {
         wsRef.current = null;
       }
     };
-  }, []); // Empty dependency array - only run once
+  }, [isSignedIn, USER_ID]); // Connect when auth state changes
 
   // Set up editor listener when editor is ready
   const handleEditorMount = (editor: any) => {
+    // Safety check - should never happen but guard against it
+    if (!isSignedIn || !USER_ID) {
+      console.error('[Tldraw] Editor mount attempted without authentication!');
+      return;
+    }
+
     console.log('[Tldraw] Editor mounted');
     editorRef.current = editor;
 
@@ -493,6 +479,39 @@ function App() {
     };
   };
 
+  // Show loading state while Clerk is initializing
+  if (!isLoaded) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        background: '#f5f5f5'
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '18px', color: '#666' }}>Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show sign-in UI for unauthenticated users
+  if (!isSignedIn || !user) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        background: '#f5f5f5'
+      }}>
+        <SignIn routing="hash" />
+      </div>
+    );
+  }
+
+  // Main app UI for authenticated users
   return (
     <div style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column' }}>
       {/* Connection status bar */}

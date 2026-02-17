@@ -5,9 +5,12 @@
  * - Embedded SQLite database for persistent state
  * - WebSocket connections for real-time sync
  * - tldraw store sync protocol
+ * - JWT authentication via Clerk
  *
  * This runs at the Edge with 0ms cold starts and zero-latency database access.
  */
+
+import { verifyToken } from '@clerk/backend';
 
 interface User {
   id: string;
@@ -16,13 +19,20 @@ interface User {
   websocket: WebSocket;
 }
 
+interface Env {
+  CLERK_PUBLISHABLE_KEY: string;
+  CLERK_SECRET_KEY: string;
+}
+
 export class BoardRoom {
   private state: DurableObjectState;
+  private env: Env;
   private users: Map<string, User>;
   private boardState: Map<string, any>; // Record ID -> Record data
 
-  constructor(state: DurableObjectState) {
+  constructor(state: DurableObjectState, env: Env) {
     this.state = state;
+    this.env = env;
     this.users = new Map();
     this.boardState = new Map();
 
@@ -132,44 +142,77 @@ export class BoardRoom {
 
         switch (message.type) {
           case 'connect': {
-            // Register new user
-            if (!message.userId) {
-              console.warn('[BoardRoom] Connect message missing userId');
+            // Verify JWT token before accepting connection
+            if (!message.token) {
+              console.error('[BoardRoom] Connect message missing JWT token');
+              webSocket.send(JSON.stringify({
+                type: 'error',
+                message: 'Authentication required',
+                error: 'Missing JWT token',
+              }));
+              webSocket.close(1008, 'Authentication required');
               return;
             }
 
-            const newUserId = message.userId as string;
-            userId = newUserId;
+            try {
+              // Verify the Clerk JWT token with a clock skew tolerance
+              const verifiedToken = await verifyToken(message.token, {
+                secretKey: this.env.CLERK_SECRET_KEY,
+                clockSkewInMs: 5000, // Allow 5 seconds clock skew tolerance
+              });
 
-            this.users.set(newUserId, {
-              id: newUserId,
-              name: message.userName,
-              color: message.userColor,
-              websocket: webSocket,
-            });
+              console.log('[BoardRoom] JWT verified for user:', verifiedToken.sub);
 
-            console.log(`[BoardRoom] User connected: ${message.userName} (${newUserId})`);
-            console.log(`[BoardRoom] Total users: ${this.users.size}`);
+              // Extract user info from verified JWT claims
+              const newUserId = verifiedToken.sub; // Clerk user ID
+              const userName = message.userName; // Use name from message (already from Clerk frontend)
+              userId = newUserId;
 
-            // Send initial state to the new user
-            const records = Array.from(this.boardState.values());
-            webSocket.send(JSON.stringify({
-              type: 'init',
-              records: records,
-              users: Array.from(this.users.values()).map(u => ({
-                id: u.id,
-                name: u.name,
-                color: u.color,
-              })),
-            }));
+              this.users.set(newUserId, {
+                id: newUserId,
+                name: userName,
+                color: message.userColor,
+                websocket: webSocket,
+              });
 
-            // Notify other users about the new connection
-            this.broadcast({
-              type: 'user-joined',
-              userId: newUserId,
-              userName: message.userName,
-              userColor: message.userColor,
-            }, newUserId);
+              console.log(`[BoardRoom] User connected: ${userName} (${newUserId})`);
+              console.log(`[BoardRoom] Total users: ${this.users.size}`);
+
+              // Send initial state to the new user
+              const records = Array.from(this.boardState.values());
+              webSocket.send(JSON.stringify({
+                type: 'init',
+                records: records,
+                users: Array.from(this.users.values()).map(u => ({
+                  id: u.id,
+                  name: u.name,
+                  color: u.color,
+                })),
+              }));
+
+              // Notify other users about the new connection
+              this.broadcast({
+                type: 'user-joined',
+                userId: newUserId,
+                userName: userName,
+                userColor: message.userColor,
+              }, newUserId);
+            } catch (error: any) {
+              console.error('[BoardRoom] JWT verification failed:', error);
+
+              // Check if token is expired
+              const isExpired = error?.reason === 'token-expired' || error?.message?.includes('expired');
+
+              webSocket.send(JSON.stringify({
+                type: 'error',
+                message: isExpired ? 'Token expired - please reconnect' : 'Authentication failed',
+                error: String(error),
+                shouldRetry: isExpired, // Frontend can use this to auto-retry
+              }));
+
+              webSocket.close(1008, isExpired ? 'Token expired' : 'Invalid authentication token');
+              return;
+            }
             break;
           }
 

@@ -14,6 +14,7 @@ export { BoardRoom };
 
 export interface Env {
   BOARD_ROOM: DurableObjectNamespace;
+  CLERK_PUBLISHABLE_KEY: string;
   CLERK_SECRET_KEY: string;
   ANTHROPIC_API_KEY: string;
 }
