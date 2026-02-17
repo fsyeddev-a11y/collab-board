@@ -1,0 +1,22 @@
+{
+  "name": "@collabboard/backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "tsc",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.20.0",
+    "@clerk/backend": "^1.0.0",
+    "@collabboard/shared": "*",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20231218.0",
+    "typescript": "^5.3.3",
+    "wrangler": "^3.22.1"
+  }
+}
