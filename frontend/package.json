@@ -11,7 +11,7 @@
     "deploy": "npm run build && firebase deploy --only hosting"
   },
   "dependencies": {
-    "@clerk/clerk-react": "^5.60.1",
+    "@clerk/clerk-react": "^5.60.2",
     "@collabboard/shared": "*",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

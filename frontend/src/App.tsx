@@ -1,12 +1,17 @@
 import { useEffect, useState, useRef } from 'react';
 import { Tldraw, InstancePresenceRecordType } from 'tldraw';
+import { useUser, useAuth, SignIn, UserButton } from '@clerk/clerk-react';
 import 'tldraw/tldraw.css';
 
-// Generate random user info for testing
-const USER_ID = `user-${Math.random().toString(36).substring(7)}`;
-const USER_NAME = `User ${Math.floor(Math.random() * 1000)}`;
+// User color palette for presence
 const USER_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E2'];
-const USER_COLOR = USER_COLORS[Math.floor(Math.random() * USER_COLORS.length)];
+
+// Helper to get consistent color for a user ID
+function getUserColor(userId: string): string {
+  // Use user ID hash to consistently assign a color
+  const hash = userId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return USER_COLORS[hash % USER_COLORS.length];
+}
 
 
 interface ConnectedUser {
@@ -16,6 +21,10 @@ interface ConnectedUser {
 }
 
 function App() {
+  // Clerk authentication hooks
+  const { isSignedIn, user, isLoaded } = useUser();
+  const { getToken } = useAuth();
+
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
   const [isPresenceExpanded, setIsPresenceExpanded] = useState(false);
@@ -29,8 +38,45 @@ function App() {
   const MAX_VISIBLE_USERS = 5;
   const MAX_RECONNECT_DELAY = 5000; // Max 5 seconds between reconnection attempts
 
+  // Show loading state while Clerk is initializing
+  if (!isLoaded) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        background: '#f5f5f5'
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '18px', color: '#666' }}>Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show sign-in UI for unauthenticated users
+  if (!isSignedIn) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        background: '#f5f5f5'
+      }}>
+        <SignIn routing="hash" />
+      </div>
+    );
+  }
+
+  // Get authenticated user info
+  const USER_ID = user.id;
+  const USER_NAME = user.fullName || user.username || user.emailAddresses[0]?.emailAddress || 'Anonymous';
+  const USER_COLOR = getUserColor(USER_ID);
+
   // WebSocket connection function
-  const connectWebSocket = () => {
+  const connectWebSocket = async () => {
     // Close existing connection if any
     if (wsRef.current) {
       console.log('[WS] Closing existing connection');
@@ -43,26 +89,44 @@ function App() {
     }
 
     const boardId = 'default-board';
-    const wsUrl = `ws://localhost:8787/board/${boardId}/ws`;
+    const wsUrl = import.meta.env.VITE_BACKEND_WS_URL || 'ws://localhost:8787';
+    const fullWsUrl = `${wsUrl}/board/${boardId}/ws`;
 
-    console.log('[WS] Connecting to:', wsUrl);
+    console.log('[WS] Connecting to:', fullWsUrl);
     setConnectionStatus('connecting');
 
-    const websocket = new WebSocket(wsUrl);
+    const websocket = new WebSocket(fullWsUrl);
     wsRef.current = websocket;
 
-    websocket.onopen = () => {
+    websocket.onopen = async () => {
       console.log('[WS] Connected');
       setConnectionStatus('connected');
       reconnectAttemptsRef.current = 0; // Reset reconnection attempts
 
-      // Send initial connect message
-      websocket.send(JSON.stringify({
-        type: 'connect',
-        userId: USER_ID,
-        userName: USER_NAME,
-        userColor: USER_COLOR,
-      }));
+      try {
+        // Get Clerk JWT token
+        const token = await getToken();
+
+        if (!token) {
+          console.error('[WS] Failed to get authentication token');
+          websocket.close();
+          return;
+        }
+
+        console.log('[WS] Sending authenticated connect message');
+
+        // Send initial connect message with JWT
+        websocket.send(JSON.stringify({
+          type: 'connect',
+          userId: USER_ID,
+          userName: USER_NAME,
+          userColor: USER_COLOR,
+          token, // Include JWT for backend verification
+        }));
+      } catch (error) {
+        console.error('[WS] Error getting token:', error);
+        websocket.close();
+      }
     };
 
     websocket.onclose = (event) => {
@@ -581,6 +645,18 @@ function App() {
             </div>
           </div>
         )}
+
+        {/* User profile button */}
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <UserButton
+            afterSignOutUrl="/"
+            appearance={{
+              elements: {
+                avatarBox: 'w-8 h-8',
+              },
+            }}
+          />
+        </div>
       </div>
 
       {/* Full-screen tldraw canvas */}

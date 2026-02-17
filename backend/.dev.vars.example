@@ -1,11 +1,6 @@
-# Cloudflare Worker Environment Variables (Development)
-# Copy this file to .dev.vars for local development
-# For production, use: wrangler secret put <KEY>
+# Clerk Authentication Keys
+CLERK_PUBLISHABLE_KEY=pk_test_your_publishable_key_here
+CLERK_SECRET_KEY=sk_test_your_secret_key_here
 
-# Clerk Authentication
-# Get from: https://dashboard.clerk.com -> API Keys -> Secret Keys
-CLERK_SECRET_KEY=sk_test_xxxxxxxxxxxxxxxxxxxxx
-
-# Anthropic AI (Phase 2)
-# Get from: https://console.anthropic.com/settings/keys
-ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxxxxxxx
+# Anthropic API (for Phase 2 AI features)
+ANTHROPIC_API_KEY=sk-ant-your_api_key_here
