@@ -19,7 +19,7 @@
 ## 1. Core Infrastructure & Access
 
 - [ ] [cite_start]**User Authentication:** Integrate Clerk for simple user login/auth[cite: 31].
-- [ ] [cite_start]**Public Deployment:** The app must be deployed and publicly accessible (Firebase for frontend, Cloudflare for backend)[cite: 33].
+- [ ] [cite_start]**Public Deployment:** The app must be deployed and publicly accessible (Cloudflare Pages for frontend, Cloudflare Workers for backend - unified edge architecture)[cite: 33].
 
 ## 2. Real-Time Collaboration Layer
 

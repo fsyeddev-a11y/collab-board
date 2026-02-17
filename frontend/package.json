@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
-    "deploy": "npm run build && firebase deploy --only hosting"
+    "deploy": "npm run build && wrangler pages deploy dist --project-name=collabboard"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.60.2",
@@ -23,6 +23,7 @@
     "@types/react-dom": "^18.2.18",
     "@vitejs/plugin-react": "^4.2.1",
     "typescript": "^5.3.3",
-    "vite": "^5.0.11"
+    "vite": "^5.0.11",
+    "wrangler": "^4.66.0"
   }
 }

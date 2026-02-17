@@ -24,11 +24,12 @@ Phase 1: Define Your Constraints
    Preference: Shipping speed over deep-dive learning, utilizing familiar JavaScript/TypeScript stacks.
    Phase 2: Architecture Discovery
 6. Hosting & Deployment
-   Frontend: Firebase Hosting (Free, global CDN, zero-config deployment via web.app subdomain).
+   Frontend: Cloudflare Pages (Free tier, global edge CDN, Git-based deployment with pages.dev subdomain).
    Backend: Cloudflare Workers (Free tier, Global Edge deployment with 0ms cold starts via workers.dev subdomain).
+   Architecture: Unified Cloudflare Edge - both frontend and backend run on Cloudflare's global network for optimal performance.
 7. Authentication & Authorization
    Tool: Clerk (Drop-in React UI components and JWT verification).
-   Strategy: Clerk will handle the UI, and we will use Clerk’s built-in Firebase JWT integration to securely bridge the auth state to our database rules.
+   Strategy: Clerk handles the authentication UI. The backend uses @clerk/backend SDK to cryptographically verify JWTs on every WebSocket connection and API request, ensuring only authenticated users can access board data.
 8. Database & Data Layer
    Tool: Cloudflare Durable Objects (SQLite Backend).
    Why: Runs in the exact same thread as the application code, providing zero-latency reads/writes for fast-moving cursors and native integration with the tldraw sync engine on the free tier.
@@ -44,9 +45,6 @@ Phase 1: Define Your Constraints
     Claude API via Anthropic (for Function Calling/Tool Execution).
     Clerk (for Authentication).
 
-Phase 3: Post-Stack Refinement 12. Security Vulnerabilities
-Prompt Injection: Prevented by strictly enforcing AI "tools" via structured JSON schemas on the Node.js backend rather than raw string execution.
-Database Takeover: MVP will immediately implement Firebase Security Rules requiring valid custom Clerk JWTs before allowing read/write access to the board state.
 Phase 3: Post-Stack Refinement 12. Security Vulnerabilities
 Prompt Injection: Prevented by strictly enforcing AI "tools" via structured JSON schemas in the Cloudflare Worker, rather than executing raw string commands.
 Unauthorized AI Execution (The JWT Check): The React frontend will send the user's Clerk session token in the Authorization header. Our Cloudflare Worker will use the @clerk/backend SDK to cryptographically verify that token before executing any expensive Anthropic API calls. 13. File Structure & Project Organization
@@ -87,8 +85,12 @@ Why: It lives entirely in the Mac terminal, autonomously navigates the monorepo,
 ## 4. Hosting & Domains
 
 - **The Dilemma:** We need to host two distinct codebases (Frontend SPA + Backend Edge Worker) and want to avoid paying $10–$20 for a domain name just for a one-week MVP sprint.
-- **Decision:** **Firebase Hosting (`.web.app`) + Cloudflare Workers (`.workers.dev`)**.
-- **Rationale:** We bypass registrars entirely. Firebase automatically provisions a free, SSL-secured `.web.app` subdomain for the frontend SPA. Cloudflare provides a free `.workers.dev` subdomain for the backend API and WebSockets. This keeps our total infrastructure spend at $0 while remaining highly professional.
+- **Decision:** **Unified Cloudflare Edge: Cloudflare Pages (`.pages.dev`) + Cloudflare Workers (`.workers.dev`)**.
+- **Rationale:** We achieve a fully unified edge architecture by deploying everything to Cloudflare. Cloudflare Pages automatically provisions a free, SSL-secured `.pages.dev` subdomain for the frontend SPA with Git-based CI/CD. Cloudflare Workers provides the `.workers.dev` subdomain for the backend API and WebSockets. This unified approach delivers:
+  - **Zero infrastructure costs** on the free tier
+  - **Global edge deployment** for both frontend and backend
+  - **Optimal latency** - frontend and backend colocated on the same network
+  - **Simplified DevOps** - single platform, single CLI (`wrangler`), single dashboard
 
 ## 5. Development Tooling & Workflow
 
