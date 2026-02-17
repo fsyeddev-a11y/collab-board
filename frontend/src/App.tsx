@@ -82,9 +82,37 @@ function App() {
             // Use mergeRemoteChanges to load initial state without triggering sync
             isRemoteChangeRef.current = true;
             editor.store.mergeRemoteChanges(() => {
-              message.records.forEach((record: any) => {
-                editor.store.put([record]);
-              });
+              try {
+                // Separate records by type - load shapes before bindings
+                // This prevents arrow binding errors when the bound shape doesn't exist yet
+                const shapes: any[] = [];
+                const bindings: any[] = [];
+                const others: any[] = [];
+
+                message.records.forEach((record: any) => {
+                  if (!record || !record.id || !record.typeName) {
+                    console.warn('[WS] Skipping invalid initial record:', record);
+                    return;
+                  }
+
+                  if (record.typeName === 'binding') {
+                    bindings.push(record);
+                  } else if (record.typeName === 'shape') {
+                    shapes.push(record);
+                  } else {
+                    others.push(record);
+                  }
+                });
+
+                // Load in order: others first, then shapes, then bindings
+                console.log('[WS] Loading order:', others.length, 'others,', shapes.length, 'shapes,', bindings.length, 'bindings');
+
+                others.forEach((record) => editor.store.put([record]));
+                shapes.forEach((record) => editor.store.put([record]));
+                bindings.forEach((record) => editor.store.put([record]));
+              } catch (error) {
+                console.error('[WS] Error loading initial records:', error);
+              }
             });
             isRemoteChangeRef.current = false;
             console.log('[WS] Loaded', message.records.length, 'records');
@@ -102,20 +130,55 @@ function App() {
           isRemoteChangeRef.current = true;
 
           editor.store.mergeRemoteChanges(() => {
-            if (message.changes.added) {
-              Object.values(message.changes.added).forEach((record: any) => {
-                editor.store.put([record]);
-              });
-            }
-            if (message.changes.updated) {
-              Object.values(message.changes.updated).forEach((record: any) => {
-                editor.store.put([record]);
-              });
-            }
-            if (message.changes.removed) {
-              Object.keys(message.changes.removed).forEach((id: string) => {
-                editor.store.remove([id]);
-              });
+            try {
+              // Process added records - shapes before bindings
+              if (message.changes.added) {
+                const shapes: any[] = [];
+                const bindings: any[] = [];
+                const others: any[] = [];
+
+                Object.values(message.changes.added).forEach((record: any) => {
+                  if (!record || !record.id || !record.typeName) {
+                    console.warn('[WS] Skipping invalid added record:', record);
+                    return;
+                  }
+
+                  if (record.typeName === 'binding') {
+                    bindings.push(record);
+                  } else if (record.typeName === 'shape') {
+                    shapes.push(record);
+                  } else {
+                    others.push(record);
+                  }
+                });
+
+                // Load in correct order
+                others.forEach((record) => editor.store.put([record]));
+                shapes.forEach((record) => editor.store.put([record]));
+                bindings.forEach((record) => editor.store.put([record]));
+              }
+
+              // Process updated records
+              if (message.changes.updated) {
+                Object.values(message.changes.updated).forEach((record: any) => {
+                  if (record && record.id && record.typeName) {
+                    editor.store.put([record]);
+                  } else {
+                    console.warn('[WS] Skipping invalid updated record:', record);
+                  }
+                });
+              }
+
+              // Process removed records
+              if (message.changes.removed) {
+                Object.keys(message.changes.removed).forEach((id: string) => {
+                  if (id) {
+                    editor.store.remove([id]);
+                  }
+                });
+              }
+            } catch (error) {
+              console.error('[WS] Error applying remote changes:', error);
             }
           });
 
@@ -333,7 +396,6 @@ function App() {
         {connectionStatus === 'connected' && connectedUsers.length > 0 && (
           <div
             className="presence-container"
-            onMouseEnter={() => setIsPresenceExpanded(true)}
             onMouseLeave={() => setIsPresenceExpanded(false)}
             style={{
               display: 'flex',
@@ -383,6 +445,8 @@ function App() {
               ))}
               {!isPresenceExpanded && connectedUsers.length > MAX_VISIBLE_USERS && (
                 <div
+                  onMouseEnter={() => setIsPresenceExpanded(true)}
+                  onMouseLeave={() => setIsPresenceExpanded(false)}
                   style={{
                     width: '28px',
                     height: '28px',
@@ -397,8 +461,17 @@ function App() {
                     border: '2px solid rgba(255, 255, 255, 0.5)',
                     flexShrink: 0,
                     cursor: 'pointer',
+                    transition: 'transform 0.2s ease, background 0.2s ease',
                   }}
-                  title={`${connectedUsers.length - MAX_VISIBLE_USERS} more users`}
+                  title={`${connectedUsers.length - MAX_VISIBLE_USERS} more users - hover to expand`}
+                  onMouseMove={(e) => {
+                    (e.currentTarget as HTMLElement).style.transform = 'scale(1.15)';
+                    (e.currentTarget as HTMLElement).style.background = 'rgba(0, 0, 0, 0.5)';
+                  }}
+                  onMouseOut={(e) => {
+                    (e.currentTarget as HTMLElement).style.transform = 'scale(1)';
+                    (e.currentTarget as HTMLElement).style.background = 'rgba(0, 0, 0, 0.3)';
+                  }}
                 >
                   +{connectedUsers.length - MAX_VISIBLE_USERS}
                 </div>
