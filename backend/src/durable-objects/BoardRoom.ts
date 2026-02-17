@@ -188,6 +188,25 @@ export class BoardRoom {
             }
             break;
 
+          case 'cursor': {
+            // Handle cursor position updates
+            if (!userId) {
+              console.warn('[BoardRoom] Received cursor update from unregistered user');
+              return;
+            }
+
+            // Broadcast cursor position to all other users
+            this.broadcast({
+              type: 'cursor',
+              userId: message.userId,
+              userName: message.userName,
+              userColor: message.userColor,
+              x: message.x,
+              y: message.y,
+            }, userId);
+            break;
+          }
+
           case 'update': {
             // Handle tldraw store updates
             if (!userId) {

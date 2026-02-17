@@ -37,6 +37,8 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('cursor'),
     userId: z.string(),
+    userName: z.string(),
+    userColor: z.string(),
     x: z.number(),
     y: z.number(),
   }),
