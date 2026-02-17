@@ -8,6 +8,7 @@ const USER_NAME = `User ${Math.floor(Math.random() * 1000)}`;
 const USER_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E2'];
 const USER_COLOR = USER_COLORS[Math.floor(Math.random() * USER_COLORS.length)];
 
+
 interface ConnectedUser {
   id: string;
   name: string;
@@ -21,22 +22,39 @@ function App() {
   const editorRef = useRef<any>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const isRemoteChangeRef = useRef(false);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const reconnectAttemptsRef = useRef(0);
 
   // Maximum users to show before showing "+X more"
   const MAX_VISIBLE_USERS = 5;
+  const MAX_RECONNECT_DELAY = 5000; // Max 5 seconds between reconnection attempts
 
-  // Connect to WebSocket (only once on mount)
-  useEffect(() => {
+  // WebSocket connection function
+  const connectWebSocket = () => {
+    // Close existing connection if any
+    if (wsRef.current) {
+      console.log('[WS] Closing existing connection');
+      try {
+        wsRef.current.close();
+      } catch (e) {
+        console.warn('[WS] Error closing old connection:', e);
+      }
+      wsRef.current = null;
+    }
+
     const boardId = 'default-board';
     const wsUrl = `ws://localhost:8787/board/${boardId}/ws`;
 
     console.log('[WS] Connecting to:', wsUrl);
+    setConnectionStatus('connecting');
+
     const websocket = new WebSocket(wsUrl);
     wsRef.current = websocket;
 
     websocket.onopen = () => {
       console.log('[WS] Connected');
       setConnectionStatus('connected');
+      reconnectAttemptsRef.current = 0; // Reset reconnection attempts
 
       // Send initial connect message
       websocket.send(JSON.stringify({
@@ -49,7 +67,26 @@ function App() {
 
     websocket.onclose = (event) => {
       console.log('[WS] Disconnected - Code:', event.code, 'Reason:', event.reason, 'Clean:', event.wasClean);
-      setConnectionStatus('disconnected');
+
+      // Only set disconnected if this is still the current websocket
+      if (wsRef.current === websocket) {
+        setConnectionStatus('disconnected');
+
+        // Clear any existing reconnection timeout
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+        }
+
+        // Attempt to reconnect with exponential backoff
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), MAX_RECONNECT_DELAY);
+        console.log(`[WS] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current + 1})...`);
+
+        reconnectTimeoutRef.current = window.setTimeout(() => {
+          reconnectAttemptsRef.current += 1;
+          console.log('[WS] Attempting reconnection...');
+          connectWebSocket();
+        }, delay);
+      }
     };
 
     websocket.onerror = (error) => {
@@ -227,6 +264,24 @@ function App() {
             color: message.userColor,
           };
           setConnectedUsers(prev => [...prev, newUser]);
+
+          // Broadcast our current cursor position to help new user see us immediately
+          const ws = wsRef.current;
+          if (ws && ws.readyState === WebSocket.OPEN && editor) {
+            try {
+              const currentPagePoint = editor.inputs.currentPagePoint;
+              ws.send(JSON.stringify({
+                type: 'cursor',
+                userId: USER_ID,
+                userName: USER_NAME,
+                userColor: USER_COLOR,
+                x: currentPagePoint.x,
+                y: currentPagePoint.y,
+              }));
+            } catch (error) {
+              console.error('[WS] Error sending cursor on user-joined:', error);
+            }
+          }
         } else if (message.type === 'user-left') {
           // Remove presence when user leaves
           const presenceId = InstancePresenceRecordType.createId(message.userId);
@@ -244,16 +299,32 @@ function App() {
       }
     };
 
+  };
+
+  // Connect to WebSocket on mount and handle cleanup
+  useEffect(() => {
+    connectWebSocket();
+
     return () => {
       console.log('[WS] Cleaning up WebSocket');
-      if (websocket.readyState === WebSocket.OPEN) {
-        websocket.send(JSON.stringify({
-          type: 'disconnect',
-          userId: USER_ID,
-        }));
+
+      // Clear any pending reconnection attempts
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
       }
-      websocket.close();
-      wsRef.current = null;
+
+      // Close the WebSocket connection
+      const ws = wsRef.current;
+      if (ws) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'disconnect',
+            userId: USER_ID,
+          }));
+        }
+        ws.close();
+        wsRef.current = null;
+      }
     };
   }, []); // Empty dependency array - only run once
 
@@ -375,7 +446,7 @@ function App() {
         }}
       >
         {/* Connection status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div
             style={{
               width: '8px',
@@ -388,8 +459,39 @@ function App() {
           <span>
             {connectionStatus === 'connected' && `Connected as ${USER_NAME}`}
             {connectionStatus === 'connecting' && 'Connecting to board...'}
-            {connectionStatus === 'disconnected' && 'Disconnected - trying to reconnect...'}
+            {connectionStatus === 'disconnected' && 'Disconnected - reconnecting...'}
           </span>
+          {connectionStatus === 'disconnected' && (
+            <button
+              onClick={() => {
+                console.log('[WS] Manual reconnect triggered');
+                if (reconnectTimeoutRef.current) {
+                  clearTimeout(reconnectTimeoutRef.current);
+                }
+                reconnectAttemptsRef.current = 0;
+                connectWebSocket();
+              }}
+              style={{
+                padding: '4px 12px',
+                background: 'rgba(255, 255, 255, 0.2)',
+                border: '1px solid white',
+                borderRadius: '4px',
+                color: 'white',
+                fontSize: '12px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.background = 'rgba(255, 255, 255, 0.3)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.background = 'rgba(255, 255, 255, 0.2)';
+              }}
+            >
+              Reconnect Now
+            </button>
+          )}
         </div>
 
         {/* Presence awareness - connected users */}
@@ -524,6 +626,15 @@ function App() {
           border-bottom: 6px solid rgba(0, 0, 0, 0.85);
           pointer-events: none;
           z-index: 1001;
+        }
+
+        /* Hide unwanted toolbar items */
+        button[data-testid="tools.arrow"],
+        button[data-testid="tools.asset"],
+        button[data-testid="tools.highlight"],
+        button[data-testid="toolbar.more"],
+        .tlui-toolbar__overflow {
+          display: none !important;
         }
       `}</style>
     </div>
