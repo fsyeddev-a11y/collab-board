@@ -46,3 +46,12 @@ h1 {
 p {
   margin-bottom: 0.5rem;
 }
+
+/* tldraw: make edit mode on sticky notes visually obvious */
+.tl-text-input {
+  background: rgba(255, 255, 255, 0.92) !important;
+  box-shadow: 0 0 0 3px #2563eb, 0 0 0 5px rgba(37, 99, 235, 0.3) !important;
+  border-radius: 2px !important;
+  caret-color: #1d4ed8 !important;
+  caret-width: 2px !important;
+}
