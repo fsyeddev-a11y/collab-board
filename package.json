@@ -17,7 +17,10 @@
     "build": "npm run build:shared && npm run build:frontend && npm run build:backend",
     "deploy:frontend": "npm run deploy --workspace=frontend",
     "deploy:backend": "npm run deploy --workspace=backend",
-    "type-check": "npm run type-check --workspace=frontend && npm run type-check --workspace=backend"
+    "type-check": "npm run type-check --workspace=frontend && npm run type-check --workspace=backend",
+    "test:frontend": "npm run test --workspace=frontend",
+    "test:backend": "npm run test --workspace=backend",
+    "test": "npm run test:frontend && npm run test:backend"
   },
   "engines": {
     "node": ">=18.0.0"

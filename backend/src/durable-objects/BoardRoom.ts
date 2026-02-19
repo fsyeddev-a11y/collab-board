@@ -10,7 +10,10 @@
  * This runs at the Edge with 0ms cold starts and zero-latency database access.
  */
 
-import { verifyToken } from '@clerk/backend';
+// verifyToken is imported dynamically inside the connect handler so that
+// @clerk/backend (and its transitive deps) are only loaded when a real
+// WebSocket authentication is needed.  This keeps cold-start cost low and
+// prevents CJS/ESM interop issues in the vitest-pool-workers test environment.
 
 interface User {
   id: string;
@@ -155,7 +158,8 @@ export class BoardRoom {
             }
 
             try {
-              // Verify the Clerk JWT token with a clock skew tolerance
+              // Dynamic import: only loaded when a real connect is authenticated.
+              const { verifyToken } = await import('@clerk/backend');
               const verifiedToken = await verifyToken(message.token, {
                 secretKey: this.env.CLERK_SECRET_KEY,
                 clockSkewInMs: 5000, // Allow 5 seconds clock skew tolerance

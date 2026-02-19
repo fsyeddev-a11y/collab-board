@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Add vitest-pool-workers types so `cloudflare:test` imports resolve in test files.
+    // This extends (not replaces) the base workers-types entry.
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers"]
+  },
+  "include": ["src/**/*"]
+}

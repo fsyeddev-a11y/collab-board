@@ -1,0 +1,22 @@
+# Wrangler configuration used exclusively by @cloudflare/vitest-pool-workers.
+# Identical to wrangler.toml EXCEPT node_compat is omitted — the node_compat
+# CJS shim causes ESM-only transitive dependencies (e.g. snakecase-keys from
+# @clerk/backend) to be required as CJS inside the Workers runtime, which
+# throws "Cannot use require() to import an ES Module".
+# Clerk's JWT verification uses only Web Crypto, which is available natively
+# in Workers, so node_compat is not needed for the test runtime.
+
+name = "collabboard-backend-test"
+main = "src/index.ts"
+# 2024-04-03 enables the rpc compat flag required by runInDurableObject's
+# internal JSRPC mechanism, which also silences the "Tried to access 'then'"
+# warning from the workers test runner.
+compatibility_date = "2024-04-03"
+
+[[durable_objects.bindings]]
+name = "BOARD_ROOM"
+class_name = "BoardRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BoardRoom"]

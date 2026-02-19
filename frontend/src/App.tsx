@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { Tldraw, InstancePresenceRecordType } from 'tldraw';
+import type { Editor, TLRecord, TLStoreEventInfo } from '@tldraw/editor';
 import { useUser, useAuth, SignIn, UserButton } from '@clerk/clerk-react';
+import { shouldSendCursor, CURSOR_THROTTLE_MS } from './utils/cursorThrottle';
 import 'tldraw/tldraw.css';
 
 // User color palette for presence
@@ -29,7 +31,7 @@ function App() {
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
   const [isPresenceExpanded, setIsPresenceExpanded] = useState(false);
-  const editorRef = useRef<any>(null);
+  const editorRef = useRef<Editor | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const isRemoteChangeRef = useRef(false);
   const reconnectTimeoutRef = useRef<number | null>(null);
@@ -159,11 +161,11 @@ function App() {
               try {
                 // Separate records by type - load shapes before bindings
                 // This prevents arrow binding errors when the bound shape doesn't exist yet
-                const shapes: any[] = [];
-                const bindings: any[] = [];
-                const others: any[] = [];
+                const shapes: TLRecord[] = [];
+                const bindings: TLRecord[] = [];
+                const others: TLRecord[] = [];
 
-                message.records.forEach((record: any) => {
+                message.records.forEach((record: TLRecord) => {
                   if (!record || !record.id || !record.typeName) {
                     console.warn('[WS] Skipping invalid initial record:', record);
                     return;
@@ -207,11 +209,11 @@ function App() {
             try {
               // Process added records - shapes before bindings
               if (message.changes.added) {
-                const shapes: any[] = [];
-                const bindings: any[] = [];
-                const others: any[] = [];
+                const shapes: TLRecord[] = [];
+                const bindings: TLRecord[] = [];
+                const others: TLRecord[] = [];
 
-                Object.values(message.changes.added).forEach((record: any) => {
+                (Object.values(message.changes.added) as TLRecord[]).forEach((record) => {
                   if (!record || !record.id || !record.typeName) {
                     console.warn('[WS] Skipping invalid added record:', record);
                     return;
@@ -234,7 +236,7 @@ function App() {
 
               // Process updated records
               if (message.changes.updated) {
-                Object.values(message.changes.updated).forEach((record: any) => {
+                (Object.values(message.changes.updated) as TLRecord[]).forEach((record) => {
                   if (record && record.id && record.typeName) {
                     editor.store.put([record]);
                   } else {
@@ -247,7 +249,7 @@ function App() {
               if (message.changes.removed) {
                 Object.keys(message.changes.removed).forEach((id: string) => {
                   if (id) {
-                    editor.store.remove([id]);
+                    editor.store.remove([id as TLRecord['id']]);
                   }
                 });
               }
@@ -373,7 +375,7 @@ function App() {
   }, [isSignedIn, USER_ID]); // Connect when auth state changes
 
   // Set up editor listener when editor is ready
-  const handleEditorMount = (editor: any) => {
+  const handleEditorMount = (editor: Editor) => {
     // Safety check - should never happen but guard against it
     if (!isSignedIn || !USER_ID) {
       console.error('[Tldraw] Editor mount attempted without authentication!');
@@ -391,7 +393,7 @@ function App() {
     });
 
     // Listen to local changes and send to server
-    const handleChange = (event: any) => {
+    const handleChange = (event: TLStoreEventInfo) => {
       // Skip remote changes to prevent loops
       if (isRemoteChangeRef.current) return;
 
@@ -414,7 +416,7 @@ function App() {
                 Object.entries(changes.added).map(([id, record]) => [id, record])
               ),
               updated: Object.fromEntries(
-                Object.entries(changes.updated).map(([id, update]: [string, any]) => [id, update[1]])
+                Object.entries(changes.updated).map(([id, [, to]]) => [id, to])
               ),
               removed: Object.fromEntries(
                 Object.entries(changes.removed).map(([id, record]) => [id, record])
@@ -437,34 +439,29 @@ function App() {
     let lastCursorUpdate = 0;
     let lastCursorX = 0;
     let lastCursorY = 0;
-    const CURSOR_THROTTLE_MS = 50; // Send cursor updates at most every 50ms
 
     const cursorInterval = setInterval(() => {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
       try {
-        // Get current cursor position from the editor
         const currentPagePoint = editor.inputs.currentPagePoint;
         const x = currentPagePoint.x;
         const y = currentPagePoint.y;
+        const now = Date.now();
 
-        // Only send if cursor has moved
-        if (x !== lastCursorX || y !== lastCursorY) {
-          const now = Date.now();
-          if (now - lastCursorUpdate >= CURSOR_THROTTLE_MS) {
-            ws.send(JSON.stringify({
-              type: 'cursor',
-              userId: USER_ID,
-              userName: USER_NAME,
-              userColor: USER_COLOR,
-              x,
-              y,
-            }));
-            lastCursorUpdate = now;
-            lastCursorX = x;
-            lastCursorY = y;
-          }
+        if (shouldSendCursor(x, y, lastCursorX, lastCursorY, lastCursorUpdate, now)) {
+          ws.send(JSON.stringify({
+            type: 'cursor',
+            userId: USER_ID,
+            userName: USER_NAME,
+            userColor: USER_COLOR,
+            x,
+            y,
+          }));
+          lastCursorUpdate = now;
+          lastCursorX = x;
+          lastCursorY = y;
         }
       } catch (error) {
         console.error('[WS] Error sending cursor update:', error);
