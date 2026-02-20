@@ -1,82 +1,207 @@
 /**
- * Cloudflare Worker Entry Point
+ * Cloudflare Worker entry point — Phase 3 multi-tenant build.
  *
- * This Worker handles:
- * 1. WebSocket connections (routed to Durable Objects for real-time sync)
- * 2. HTTP REST endpoints (including AI generation in Phase 2)
- * 3. Authentication verification via Clerk JWT
+ * Security gates in request order:
+ *
+ *  REST endpoints (Authorization: Bearer <jwt>)
+ *   1. verifyClerkRequest   — JWT must be valid and not expired.
+ *   2. Business rule checks — org membership, ownership, etc.
+ *   3. Parameterized D1 queries — no string interpolation anywhere.
+ *
+ *  WebSocket upgrade (/board/:id/ws?token=<jwt>)
+ *   Gate 1. verifyClerkQueryToken — JWT in ?token= query param (browser
+ *           WebSocket API cannot send custom headers).
+ *   Gate 2. userCanAccessBoard — D1 query confirms the board exists AND
+ *           the user belongs to its org OR is an explicit guest.
+ *           A valid JWT alone is not sufficient: boardId must also be
+ *           authorized. This prevents IDOR on the real-time channel.
+ *   Gate 3. (in BoardRoom DO) — DO still verifies the same JWT on the
+ *           `connect` WS message for defense-in-depth.
  */
 
 import { BoardRoom } from './durable-objects/BoardRoom';
+import { verifyClerkRequest, verifyClerkQueryToken } from './auth';
+import { getBoardsForUser, userCanAccessBoard, userCanInviteToBoard } from './db';
 
-// Export the Durable Object class
 export { BoardRoom };
 
 export interface Env {
   BOARD_ROOM: DurableObjectNamespace;
+  DB: D1Database;
   CLERK_PUBLISHABLE_KEY: string;
   CLERK_SECRET_KEY: string;
   ANTHROPIC_API_KEY: string;
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+const CORS_HEADERS = {
+  // Tighten to your Cloudflare Pages domain in production, e.g.:
+  //   'Access-Control-Allow-Origin': 'https://collabboard.pages.dev'
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+} as const;
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
+}
+
+function apiError(message: string, status: number): Response {
+  return json({ error: message }, status);
+}
+
+// ── Worker ───────────────────────────────────────────────────────────────────
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-
-    // CORS headers for frontend communication
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    };
-
-    // Handle preflight requests
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        status: 204,
-        headers: corsHeaders,
-      });
+    try {
+      return await handleRequest(request, env);
+    } catch (err) {
+      console.error('Unhandled Worker error:', err);
+      return json({ error: 'Internal server error' }, 500);
     }
-
-    // Health check endpoint
-    if (url.pathname === '/health') {
-      return new Response(JSON.stringify({ status: 'ok', timestamp: Date.now() }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // WebSocket upgrade for real-time board sync
-    // Route: /board/:boardId/ws
-    if (url.pathname.match(/^\/board\/[\w-]+\/ws$/)) {
-      const boardId = url.pathname.split('/')[2];
-
-      // Get the Durable Object for this specific board
-      const durableObjectId = env.BOARD_ROOM.idFromName(boardId);
-      const durableObject = env.BOARD_ROOM.get(durableObjectId);
-
-      // Forward the WebSocket upgrade request to the Durable Object
-      return durableObject.fetch(request);
-    }
-
-    // AI Generation endpoint (Phase 2 - prepared but not implemented yet)
-    // Route: POST /api/generate
-    if (url.pathname === '/api/generate' && request.method === 'POST') {
-      return new Response(
-        JSON.stringify({
-          error: 'AI generation not yet implemented',
-          phase: 'Phase 2'
-        }),
-        {
-          status: 501,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      );
-    }
-
-    // Default 404
-    return new Response('Not Found', {
-      status: 404,
-      headers: corsHeaders,
-    });
   },
 };
+
+async function handleRequest(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    // CORS preflight
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
+    // Health check
+    if (url.pathname === '/health') {
+      return json({ status: 'ok', timestamp: Date.now() });
+    }
+
+    // ── POST /api/boards — create a board ────────────────────────────────────
+    if (url.pathname === '/api/boards' && request.method === 'POST') {
+      const claims = await verifyClerkRequest(request, env.CLERK_SECRET_KEY);
+      if (!claims) return apiError('Unauthorized', 401);
+
+      // Only org members can create boards — a board must belong to an org.
+      if (!claims.orgId) {
+        return apiError('An active organization is required to create boards', 403);
+      }
+
+      let body: { name?: unknown };
+      try { body = await request.json(); } catch { return apiError('Invalid JSON body', 400); }
+
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (!name) return apiError('name is required', 400);
+      if (name.length > 100) return apiError('name must be 100 characters or fewer', 400);
+
+      const boardId = crypto.randomUUID();
+      await env.DB
+        .prepare(
+          `INSERT INTO boards (id, name, org_id, created_by, created_at)
+           VALUES (?1, ?2, ?3, ?4, ?5)`,
+        )
+        .bind(boardId, name, claims.orgId, claims.userId, Date.now())
+        .run();
+
+      return json({ id: boardId, name, org_id: claims.orgId }, 201);
+    }
+
+    // ── GET /api/boards — list accessible boards ─────────────────────────────
+    if (url.pathname === '/api/boards' && request.method === 'GET') {
+      const claims = await verifyClerkRequest(request, env.CLERK_SECRET_KEY);
+      if (!claims) return apiError('Unauthorized', 401);
+
+      // Returns org-owned boards UNION guest boards — see db.ts for the query.
+      const boards = await getBoardsForUser(env.DB, claims.email, claims.orgId);
+      return json({ boards });
+    }
+
+    // ── POST /api/boards/:id/invite — add a guest to a board ─────────────────
+    const inviteMatch = url.pathname.match(/^\/api\/boards\/([\w-]+)\/invite$/);
+    if (inviteMatch && request.method === 'POST') {
+      const claims = await verifyClerkRequest(request, env.CLERK_SECRET_KEY);
+      if (!claims) return apiError('Unauthorized', 401);
+
+      const boardId = inviteMatch[1];
+
+      // Security gate: only a member of the board's owning org may invite.
+      // Guests cannot invite other guests.
+      const canInvite = await userCanInviteToBoard(env.DB, boardId, claims.orgId);
+      if (!canInvite) {
+        return apiError(
+          'Forbidden: only members of the board\'s organization can invite guests',
+          403,
+        );
+      }
+
+      let body: { email?: unknown };
+      try { body = await request.json(); } catch { return apiError('Invalid JSON body', 400); }
+
+      const inviteeEmail = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+      if (!inviteeEmail) return apiError('email is required', 400);
+      if (!inviteeEmail.includes('@')) return apiError('email must be a valid email address', 400);
+
+      // INSERT OR IGNORE: idempotent — re-inviting an existing guest is a no-op.
+      await env.DB
+        .prepare(
+          `INSERT OR IGNORE INTO board_guests (board_id, email, added_at)
+           VALUES (?1, ?2, ?3)`,
+        )
+        .bind(boardId, inviteeEmail, Date.now())
+        .run();
+
+      return json({ success: true });
+    }
+
+    // ── WebSocket upgrade — /board/:id/ws?token=<jwt> ────────────────────────
+    const wsMatch = url.pathname.match(/^\/board\/([\w-]+)\/ws$/);
+    if (wsMatch && request.headers.get('Upgrade') === 'websocket') {
+      const boardId = wsMatch[1];
+
+      // ── Gate 1: JWT verification ──────────────────────────────────────────
+      // The browser WebSocket API cannot set custom headers, so the JWT is
+      // passed as a query parameter instead. Note: query params appear in
+      // server logs; a pre-auth token exchange would be more secure but is
+      // out of scope for this phase.
+      const claims = await verifyClerkQueryToken(url, env.CLERK_SECRET_KEY);
+      if (!claims) {
+        return new Response('Unauthorized: missing or invalid token', {
+          status: 401,
+          headers: CORS_HEADERS,
+        });
+      }
+
+      // ── Gate 2: D1 board access check (IDOR prevention) ──────────────────
+      // A valid JWT is necessary but not sufficient. The board must exist in
+      // D1 AND the user must be authorized for it. This single parameterized
+      // query enforces both conditions atomically — there is no TOCTOU window.
+      const hasAccess = await userCanAccessBoard(
+        env.DB,
+        boardId,
+        claims.email,
+        claims.orgId,
+      );
+      if (!hasAccess) {
+        return new Response(
+          'Forbidden: you do not have access to this board',
+          { status: 403, headers: CORS_HEADERS },
+        );
+      }
+
+      // Both gates passed — route to the Durable Object.
+      // Gate 3 (JWT re-verification) happens inside the DO on the `connect`
+      // message for defense-in-depth.
+      const doId = env.BOARD_ROOM.idFromName(boardId);
+      return env.BOARD_ROOM.get(doId).fetch(request);
+    }
+
+    // AI generation (Phase 4)
+    if (url.pathname === '/api/generate' && request.method === 'POST') {
+      return json({ error: 'AI generation not yet implemented', phase: 'Phase 4' }, 501);
+    }
+
+    return new Response('Not Found', { status: 404, headers: CORS_HEADERS });
+}

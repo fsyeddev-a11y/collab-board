@@ -1,26 +1,34 @@
 name = "collabboard-backend"
 main = "src/index.ts"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Durable Objects configuration
+# Durable Objects — one instance per board ID, embedded SQLite for canvas state
 [[durable_objects.bindings]]
 name = "BOARD_ROOM"
 class_name = "BoardRoom"
 
-# Migrations for Durable Objects (with SQLite enabled)
+# DO SQLite migration
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["BoardRoom"]
 
-# Environment variables (set via `wrangler secret put <KEY>`)
-# CLERK_SECRET_KEY - Clerk JWT verification
-# ANTHROPIC_API_KEY - Claude API for AI generation (Phase 2)
+# D1 — relational database for board metadata and ACL (boards + board_guests)
+# Steps to create the database if it doesn't exist yet:
+#   wrangler d1 create collabboard-db
+# Then paste the returned database_id below and apply the migration:
+#   wrangler d1 migrations apply collabboard-db
+[[d1_databases]]
+binding  = "DB"
+database_name = "collabboard-db"
+database_id   = "76fd5028-8484-4517-aff5-ccbd4708a76b"
 
-# Development mode
+# Secrets — set via `wrangler secret put <KEY>` (never committed)
+# CLERK_SECRET_KEY  — Clerk JWT verification
+# ANTHROPIC_API_KEY — Claude API (Phase 4)
+
 [env.development]
 name = "collabboard-backend-dev"
 
-# Production mode
 [env.production]
 name = "collabboard-backend"
