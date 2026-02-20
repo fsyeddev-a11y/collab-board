@@ -1,11 +1,101 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Tldraw, InstancePresenceRecordType } from 'tldraw';
-import type { Editor, TLRecord, TLStoreEventInfo } from '@tldraw/editor';
+import {
+  Tldraw,
+  InstancePresenceRecordType,
+  DefaultContextMenu,
+  DefaultContextMenuContent,
+  DefaultToolbar,
+  SelectToolbarItem,
+  HandToolbarItem,
+  DrawToolbarItem,
+  EraserToolbarItem,
+  ArrowToolbarItem,
+  TextToolbarItem,
+  FrameToolbarItem,
+  NoteToolbarItem,
+  TldrawUiMenuGroup,
+  TldrawUiMenuItem,
+  useEditor,
+  useToasts,
+} from 'tldraw';
+import type { Editor, TLRecord, TLStoreEventInfo, TLShapeId } from '@tldraw/editor';
 import { useUser, useAuth, UserButton } from '@clerk/clerk-react';
 import { shouldSendCursor, CURSOR_THROTTLE_MS } from '../utils/cursorThrottle';
 import { patchNoteCloneHandle } from '../utils/noteArrowOverride';
+import { removeFrameKeepContents, deleteFrameWithContents } from '../utils/frameActions';
 import 'tldraw/tldraw.css';
+
+// ── Custom context menu ───────────────────────────────────────────────────────
+// Defined at module level (outside BoardPage) so tldraw never sees it as a
+// new component type on re-render, which would cause a context menu remount.
+function FrameContextMenu() {
+  const editor = useEditor();
+  const { addToast } = useToasts();
+
+  const selectedShapes = editor.getSelectedShapes();
+  const singleFrame =
+    selectedShapes.length === 1 && selectedShapes[0].type === 'frame'
+      ? selectedShapes[0]
+      : null;
+
+  return (
+    <DefaultContextMenu>
+      {singleFrame && (
+        <TldrawUiMenuGroup id="frame-actions">
+          <TldrawUiMenuItem
+            id="delete-frame-with-contents"
+            label="Delete Frame & Contents"
+            onSelect={() => {
+              deleteFrameWithContents(editor, singleFrame.id as TLShapeId);
+              addToast({
+                title: 'Frame deleted',
+                description: 'The frame and all its contents were removed.',
+                severity: 'success',
+              });
+            }}
+          />
+          <TldrawUiMenuItem
+            id="remove-frame-keep-contents"
+            label="Remove Frame (Keep Contents)"
+            onSelect={() => {
+              removeFrameKeepContents(editor, singleFrame.id as TLShapeId);
+              addToast({
+                title: 'Frame removed',
+                description: 'Child shapes were moved back to the page.',
+                severity: 'success',
+              });
+            }}
+          />
+        </TldrawUiMenuGroup>
+      )}
+      <DefaultContextMenuContent />
+    </DefaultContextMenu>
+  );
+}
+
+// ── Custom toolbar ────────────────────────────────────────────────────────────
+// Defined at module level to prevent remounts on re-render.
+// Order: Select → Hand → Draw → Eraser → Arrow → Text → Frame → Note
+function CustomToolbar() {
+  return (
+    <DefaultToolbar>
+      <SelectToolbarItem />
+      <HandToolbarItem />
+      <DrawToolbarItem />
+      <EraserToolbarItem />
+      <ArrowToolbarItem />
+      <TextToolbarItem />
+      <FrameToolbarItem />
+      <NoteToolbarItem />
+    </DefaultToolbar>
+  );
+}
+
+const TLDRAW_COMPONENTS = {
+  ContextMenu: FrameContextMenu,
+  Toolbar: CustomToolbar,
+} as const;
 
 const USER_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E2'];
 
@@ -471,16 +561,20 @@ export function BoardPage() {
 
       {/* ── Canvas ──────────────────────────────────────────────────────────── */}
       <div style={{ flex: 1 }}>
-        <Tldraw onMount={handleEditorMount} />
+        <Tldraw components={TLDRAW_COMPONENTS} onMount={handleEditorMount} />
       </div>
 
       <style>{`
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        button[data-testid="tools.arrow"],
         button[data-testid="tools.asset"],
-        button[data-testid="tools.highlight"],
-        button[data-testid="toolbar.more"],
-        .tlui-toolbar__overflow { display: none !important; }
+        button[data-testid="tools.highlight"] { display: none !important; }
+        .tl-frame-heading {
+          left: 0 !important;
+          right: 0 !important;
+          width: fit-content !important;
+          max-width: fit-content !important;
+          margin: 0 auto !important;
+        }
       `}</style>
     </div>
   );

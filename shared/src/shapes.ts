@@ -33,7 +33,7 @@ const TLFillSchema = z.enum(['none', 'solid', 'semi', 'pattern', 'fill']);
 export const BaseShapeSchema = z.object({
   id: z.string(),            // e.g. "shape:abc123"
   typeName: z.literal('shape'),
-  parentId: z.string(),      // e.g. "page:page"
+  parentId: z.string(),      // page ID ("page:page") OR frame ID ("shape:abc") for nested shapes
   index: z.string(),         // fractional index e.g. "a1"
   x: z.number(),
   y: z.number(),
@@ -113,12 +113,44 @@ export const FrameShapeSchema = BaseShapeSchema.extend({
   }),
 });
 
+// ── Arrow shape ───────────────────────────────────────────────────────────────
+// Represents tldraw's native arrow connector.  Bindings (start/end terminal
+// attachments to other shapes) are stored as separate `binding` records
+// (type: 'arrow') and are NOT part of the arrow's props — they reference the
+// arrow via `fromId` and the target shape via `toId`.
+const TLArrowheadSchema = z.enum([
+  'none', 'arrow', 'triangle', 'square', 'dot', 'pipe', 'diamond', 'inverted',
+]);
+
+export const ArrowShapeSchema = BaseShapeSchema.extend({
+  type: z.literal('arrow'),
+  props: z.object({
+    dash: TLDashSchema.default('draw'),
+    size: TLSizeSchema.default('m'),
+    fill: TLFillSchema.default('none'),
+    color: TLColorSchema.default('black'),
+    labelColor: TLColorSchema.default('black'),
+    bend: z.number().default(0),
+    // Terminal positions in the arrow's own local space when unbound;
+    // ignored visually when a binding record is attached to that terminal.
+    start: z.object({ x: z.number(), y: z.number() }),
+    end: z.object({ x: z.number(), y: z.number() }),
+    arrowheadStart: TLArrowheadSchema.default('none'),
+    arrowheadEnd: TLArrowheadSchema.default('arrow'),
+    text: z.string().default(''),
+    labelPosition: z.number().default(0.5),
+    font: TLFontSchema.default('sans'),
+    scale: z.number().default(1),
+  }),
+});
+
 // ── Union ─────────────────────────────────────────────────────────────────────
 export const ShapeSchema = z.discriminatedUnion('type', [
   NoteShapeSchema,
   GeoShapeSchema,
   TextShapeSchema,
   FrameShapeSchema,
+  ArrowShapeSchema,
 ]);
 
 // Type exports
@@ -127,4 +159,5 @@ export type NoteShape = z.infer<typeof NoteShapeSchema>;
 export type GeoShape = z.infer<typeof GeoShapeSchema>;
 export type TextShape = z.infer<typeof TextShapeSchema>;
 export type FrameShape = z.infer<typeof FrameShapeSchema>;
+export type ArrowShape = z.infer<typeof ArrowShapeSchema>;
 export type Shape = z.infer<typeof ShapeSchema>;
