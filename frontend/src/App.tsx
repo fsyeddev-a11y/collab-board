@@ -29,7 +29,7 @@ function App() {
   const { getToken } = useAuth();
 
   // All other hooks - MUST be called unconditionally
-  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'failed'>('connecting');
   const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
   const [isPresenceExpanded, setIsPresenceExpanded] = useState(false);
   const editorRef = useRef<Editor | null>(null);
@@ -40,340 +40,338 @@ function App() {
 
   // Maximum users to show before showing "+X more"
   const MAX_VISIBLE_USERS = 5;
-  const MAX_RECONNECT_DELAY = 5000; // Max 5 seconds between reconnection attempts
+  const MAX_RECONNECT_DELAY = 5000;
+  const MAX_RECONNECT_ATTEMPTS = 5;
+
+  // Stable ref to the latest connectWebSocket function. The function itself
+  // lives inside useEffect to avoid stale closures over USER_ID / getToken.
+  // The button and any other non-effect code use this ref to trigger a reconnect.
+  const connectRef = useRef<(() => Promise<void>) | null>(null);
 
   // Get authenticated user info (only when signed in)
   const USER_ID = isSignedIn && user ? user.id : '';
   const USER_NAME = isSignedIn && user ? (user.fullName || user.username || user.emailAddresses[0]?.emailAddress || 'Anonymous') : '';
   const USER_COLOR = USER_ID ? getUserColor(USER_ID) : '#666';
 
-  // WebSocket connection function
-  const connectWebSocket = async () => {
-    // Close existing connection if any
-    if (wsRef.current) {
-      console.log('[WS] Closing existing connection');
+  // Connect to WebSocket when authenticated.
+  //
+  // connectWebSocket is defined INSIDE useEffect so every reconnect attempt
+  // always closes over the correct USER_ID / USER_NAME / USER_COLOR / getToken
+  // values from the moment the effect ran. Defining it outside would capture
+  // stale values if Clerk updated user info between reconnect attempts.
+  useEffect(() => {
+    if (!isSignedIn || !USER_ID) return;
+
+    // ── StrictMode safety via the `destroyed` flag ────────────────────────
+    // React StrictMode mounts → unmounts → remounts every effect in development.
+    // `destroyed` is set to true in the cleanup function BEFORE socket.close()
+    // is called.  Because WebSocket's onclose fires asynchronously, it will
+    // always see `destroyed === true` by the time it runs and will never
+    // schedule a reconnect for the dead first-mount.  This prevents a stale
+    // socket from racing against the second mount's fresh connection.
+    let destroyed = false;
+
+    const connectWebSocket = async () => {
+      if (destroyed) return;
+
+      // Close any leftover socket before opening a new one
+      if (wsRef.current) {
+        try { wsRef.current.close(); } catch (_) { /* ignore */ }
+        wsRef.current = null;
+      }
+
+      // Always fetch a fresh JWT — avoids sending an expired token on reconnects
+      let token: string | null = null;
       try {
-        wsRef.current.close();
-      } catch (e) {
-        console.warn('[WS] Error closing old connection:', e);
+        token = await getToken({ skipCache: true });
+        if (!token) { setConnectionStatus('disconnected'); return; }
+      } catch (_) {
+        setConnectionStatus('disconnected'); return;
       }
-      wsRef.current = null;
-    }
 
-    // Get FRESH JWT token BEFORE connecting (important for reconnections)
-    console.log('[WS] Getting fresh authentication token...');
-    let token: string | null = null;
-    try {
-      // Force a fresh token by passing { skipCache: true }
-      token = await getToken({ skipCache: true });
-      if (!token) {
-        console.error('[WS] Failed to get authentication token');
+      // The effect may have been cleaned up while we were awaiting the token
+      if (destroyed) return;
+
+      const boardId = 'default-board';
+      const wsUrl = import.meta.env.VITE_BACKEND_WS_URL || 'ws://localhost:8787';
+      const websocket = new WebSocket(`${wsUrl}/board/${boardId}/ws`);
+      wsRef.current = websocket;
+      setConnectionStatus('connecting');
+
+      websocket.onopen = () => {
+        if (destroyed) { websocket.close(); return; }
+        setConnectionStatus('connected');
+        reconnectAttemptsRef.current = 0; // Reset on every successful open
+        websocket.send(JSON.stringify({
+          type: 'connect',
+          userId: USER_ID,
+          userName: USER_NAME,
+          userColor: USER_COLOR,
+          token,
+        }));
+      };
+
+      websocket.onclose = () => {
+        // Ignore if this effect instance was already cleaned up, or if a newer
+        // socket has taken over wsRef (e.g. a manual reconnect fired first).
+        if (destroyed || wsRef.current !== websocket) return;
+
         setConnectionStatus('disconnected');
-        return;
-      }
-      console.log('[WS] Fresh token obtained successfully');
-    } catch (error) {
-      console.error('[WS] Error getting token:', error);
-      setConnectionStatus('disconnected');
-      return;
-    }
-
-    const boardId = 'default-board';
-    const wsUrl = import.meta.env.VITE_BACKEND_WS_URL || 'ws://localhost:8787';
-    const fullWsUrl = `${wsUrl}/board/${boardId}/ws`;
-
-    console.log('[WS] Connecting to:', fullWsUrl);
-    setConnectionStatus('connecting');
-
-    const websocket = new WebSocket(fullWsUrl);
-    wsRef.current = websocket;
-
-    websocket.onopen = () => {
-      console.log('[WS] WebSocket opened');
-      setConnectionStatus('connected');
-      reconnectAttemptsRef.current = 0; // Reset reconnection attempts
-
-      console.log('[WS] Sending authenticated connect message');
-
-      // Send initial connect message with JWT (already obtained)
-      websocket.send(JSON.stringify({
-        type: 'connect',
-        userId: USER_ID,
-        userName: USER_NAME,
-        userColor: USER_COLOR,
-        token, // Include JWT for backend verification
-      }));
-    };
-
-    websocket.onclose = (event) => {
-      console.log('[WS] Disconnected - Code:', event.code, 'Reason:', event.reason, 'Clean:', event.wasClean);
-
-      // Only set disconnected if this is still the current websocket
-      if (wsRef.current === websocket) {
-        setConnectionStatus('disconnected');
-
-        // Clear any existing reconnection timeout
-        if (reconnectTimeoutRef.current) {
+        if (reconnectTimeoutRef.current !== null) {
           clearTimeout(reconnectTimeoutRef.current);
+          reconnectTimeoutRef.current = null;
         }
 
-        // Attempt to reconnect with exponential backoff
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), MAX_RECONNECT_DELAY);
-        console.log(`[WS] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current + 1})...`);
+        // ── Exponential backoff with a hard attempt cap ───────────────────
+        // Increment BEFORE the limit check.  The manual "Reconnect" button
+        // resets the counter to 0, which restarts the full 5-attempt window.
+        reconnectAttemptsRef.current += 1;
+
+        if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
+          console.warn(`[WS] Giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts.`);
+          setConnectionStatus('failed');
+          return;
+        }
+
+        // Delay schedule: 1s → 2s → 4s → 5s (cap) → 5s
+        const delay = Math.min(
+          1000 * Math.pow(2, reconnectAttemptsRef.current - 1),
+          MAX_RECONNECT_DELAY,
+        );
+        console.log(`[WS] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})...`);
 
         reconnectTimeoutRef.current = window.setTimeout(() => {
-          reconnectAttemptsRef.current += 1;
-          console.log('[WS] Attempting reconnection...');
-          connectWebSocket();
+          reconnectTimeoutRef.current = null;
+          if (!destroyed) connectWebSocket();
         }, delay);
-      }
-    };
+      };
 
-    websocket.onerror = (error) => {
-      console.error('[WS] WebSocket Error:', error);
-      setConnectionStatus('disconnected');
-    };
+      websocket.onerror = () => {
+        if (!destroyed) setConnectionStatus('disconnected');
+      };
 
-    websocket.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        console.log('[WS] Received:', message.type);
+      websocket.onmessage = (event) => {
+        if (destroyed) return;
+        try {
+          const message = JSON.parse(event.data);
+          const editor = editorRef.current;
+          if (!editor) return;
 
-        const editor = editorRef.current;
-        if (!editor) {
-          console.log('[WS] Editor not ready yet, queuing message');
-          return;
-        }
+          // ── error ────────────────────────────────────────────────────────
+          if (message.type === 'error') {
+            console.error('[WS] Server error:', message.message, message.error);
+            // shouldRetry === false is a permanent failure signal from the
+            // backend (e.g. a revoked Clerk token). Cancel pending retries
+            // and surface the failure state to the user immediately.
+            if (message.shouldRetry === false) {
+              if (reconnectTimeoutRef.current !== null) {
+                clearTimeout(reconnectTimeoutRef.current);
+                reconnectTimeoutRef.current = null;
+              }
+              setConnectionStatus('failed');
+            }
+            return;
+          }
 
-        // Handle error messages from server
-        if (message.type === 'error') {
-          console.error('[WS] Server error:', message.message, message.error);
-          return;
-        }
+          // ── init ─────────────────────────────────────────────────────────
+          if (message.type === 'init' && message.records) {
+            console.log('[WS] Loading initial records:', message.records.length);
+            if (message.records.length > 0) {
+              isRemoteChangeRef.current = true;
+              editor.store.mergeRemoteChanges(() => {
+                try {
+                  // Separate records by type — load shapes before bindings
+                  // to prevent arrow binding errors when the bound shape
+                  // does not exist yet.
+                  const shapes: TLRecord[] = [];
+                  const bindings: TLRecord[] = [];
+                  const others: TLRecord[] = [];
 
-        // Handle different message types
-        if (message.type === 'init' && message.records) {
-          // Load initial records from server
-          console.log('[WS] Loading initial records:', message.records.length);
-          if (message.records.length > 0) {
-            // Use mergeRemoteChanges to load initial state without triggering sync
+                  message.records.forEach((record: TLRecord) => {
+                    if (!record || !record.id || !record.typeName) {
+                      console.warn('[WS] Skipping invalid initial record:', record);
+                      return;
+                    }
+                    if (record.typeName === 'binding') bindings.push(record);
+                    else if (record.typeName === 'shape') shapes.push(record);
+                    else others.push(record);
+                  });
+
+                  others.forEach((r) => editor.store.put([r]));
+                  shapes.forEach((r) => editor.store.put([r]));
+                  bindings.forEach((r) => editor.store.put([r]));
+                } catch (error) {
+                  console.error('[WS] Error loading initial records:', error);
+                } finally {
+                  // Reset INSIDE the callback via finally so the flag only
+                  // clears after tldraw has fully processed every record in
+                  // the batch. Resetting outside risks a local-change listener
+                  // firing in the gap and echoing the update back to the server.
+                  isRemoteChangeRef.current = false;
+                }
+              });
+            }
+            if (message.users) setConnectedUsers(message.users);
+
+          // ── update ───────────────────────────────────────────────────────
+          } else if (message.type === 'update' && message.changes) {
+            console.log('[WS] Applying remote changes');
             isRemoteChangeRef.current = true;
             editor.store.mergeRemoteChanges(() => {
               try {
-                // Separate records by type - load shapes before bindings
-                // This prevents arrow binding errors when the bound shape doesn't exist yet
-                const shapes: TLRecord[] = [];
-                const bindings: TLRecord[] = [];
-                const others: TLRecord[] = [];
+                if (message.changes.added) {
+                  const shapes: TLRecord[] = [];
+                  const bindings: TLRecord[] = [];
+                  const others: TLRecord[] = [];
 
-                message.records.forEach((record: TLRecord) => {
-                  if (!record || !record.id || !record.typeName) {
-                    console.warn('[WS] Skipping invalid initial record:', record);
-                    return;
-                  }
+                  (Object.values(message.changes.added) as TLRecord[]).forEach((record) => {
+                    if (!record || !record.id || !record.typeName) {
+                      console.warn('[WS] Skipping invalid added record:', record);
+                      return;
+                    }
+                    if (record.typeName === 'binding') bindings.push(record);
+                    else if (record.typeName === 'shape') shapes.push(record);
+                    else others.push(record);
+                  });
 
-                  if (record.typeName === 'binding') {
-                    bindings.push(record);
-                  } else if (record.typeName === 'shape') {
-                    shapes.push(record);
-                  } else {
-                    others.push(record);
-                  }
-                });
+                  others.forEach((r) => editor.store.put([r]));
+                  shapes.forEach((r) => editor.store.put([r]));
+                  bindings.forEach((r) => editor.store.put([r]));
+                }
 
-                // Load in order: others first, then shapes, then bindings
-                console.log('[WS] Loading order:', others.length, 'others,', shapes.length, 'shapes,', bindings.length, 'bindings');
+                if (message.changes.updated) {
+                  (Object.values(message.changes.updated) as TLRecord[]).forEach((record) => {
+                    if (record && record.id && record.typeName) editor.store.put([record]);
+                    else console.warn('[WS] Skipping invalid updated record:', record);
+                  });
+                }
 
-                others.forEach((record) => editor.store.put([record]));
-                shapes.forEach((record) => editor.store.put([record]));
-                bindings.forEach((record) => editor.store.put([record]));
+                if (message.changes.removed) {
+                  Object.keys(message.changes.removed).forEach((id: string) => {
+                    if (id) editor.store.remove([id as TLRecord['id']]);
+                  });
+                }
               } catch (error) {
-                console.error('[WS] Error loading initial records:', error);
+                console.error('[WS] Error applying remote changes:', error);
+              } finally {
+                isRemoteChangeRef.current = false;
               }
             });
-            isRemoteChangeRef.current = false;
-            console.log('[WS] Loaded', message.records.length, 'records');
-          }
 
-          // Update connected users list (including ourselves)
-          if (message.users) {
-            setConnectedUsers(message.users);
-          }
-        } else if (message.type === 'update' && message.changes) {
-          // Apply updates from other users
-          console.log('[WS] Applying remote changes');
+          // ── cursor ───────────────────────────────────────────────────────
+          } else if (message.type === 'cursor') {
+            const { userId, userName, userColor, x, y } = message;
+            if (userId === USER_ID) return;
 
-          // Mark as remote change to prevent echo
-          isRemoteChangeRef.current = true;
+            const presenceId = InstancePresenceRecordType.createId(userId);
+            const currentPageId = editor.getCurrentPageId();
+            const presence = {
+              id: presenceId,
+              typeName: 'instance_presence' as const,
+              userId,
+              userName,
+              currentPageId,
+              cursor: { x, y, type: 'default' as const, rotation: 0 },
+              color: userColor,
+              camera: { x: 0, y: 0, z: 1 },
+              selectedShapeIds: [],
+              brush: null,
+              scribbles: [],
+              screenBounds: { x: 0, y: 0, w: 1920, h: 1080 },
+              followingUserId: null,
+              meta: {},
+              chatMessage: '',
+              lastActivityTimestamp: Date.now(),
+            };
 
-          editor.store.mergeRemoteChanges(() => {
-            try {
-              // Process added records - shapes before bindings
-              if (message.changes.added) {
-                const shapes: TLRecord[] = [];
-                const bindings: TLRecord[] = [];
-                const others: TLRecord[] = [];
-
-                (Object.values(message.changes.added) as TLRecord[]).forEach((record) => {
-                  if (!record || !record.id || !record.typeName) {
-                    console.warn('[WS] Skipping invalid added record:', record);
-                    return;
-                  }
-
-                  if (record.typeName === 'binding') {
-                    bindings.push(record);
-                  } else if (record.typeName === 'shape') {
-                    shapes.push(record);
-                  } else {
-                    others.push(record);
-                  }
-                });
-
-                // Load in correct order
-                others.forEach((record) => editor.store.put([record]));
-                shapes.forEach((record) => editor.store.put([record]));
-                bindings.forEach((record) => editor.store.put([record]));
+            isRemoteChangeRef.current = true;
+            editor.store.mergeRemoteChanges(() => {
+              try {
+                editor.store.put([presence]);
+              } finally {
+                isRemoteChangeRef.current = false;
               }
+            });
 
-              // Process updated records
-              if (message.changes.updated) {
-                (Object.values(message.changes.updated) as TLRecord[]).forEach((record) => {
-                  if (record && record.id && record.typeName) {
-                    editor.store.put([record]);
-                  } else {
-                    console.warn('[WS] Skipping invalid updated record:', record);
-                  }
-                });
-              }
+          // ── user-joined ──────────────────────────────────────────────────
+          } else if (message.type === 'user-joined') {
+            setConnectedUsers(prev => [...prev, {
+              id: message.userId,
+              name: message.userName,
+              color: message.userColor,
+            }]);
 
-              // Process removed records
-              if (message.changes.removed) {
-                Object.keys(message.changes.removed).forEach((id: string) => {
-                  if (id) {
-                    editor.store.remove([id as TLRecord['id']]);
-                  }
-                });
+            // Broadcast our current cursor position so the new user sees us
+            const ws = wsRef.current;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              try {
+                const currentPagePoint = editor.inputs.currentPagePoint;
+                ws.send(JSON.stringify({
+                  type: 'cursor',
+                  userId: USER_ID,
+                  userName: USER_NAME,
+                  userColor: USER_COLOR,
+                  x: currentPagePoint.x,
+                  y: currentPagePoint.y,
+                }));
+              } catch (error) {
+                console.error('[WS] Error sending cursor on user-joined:', error);
               }
-            } catch (error) {
-              console.error('[WS] Error applying remote changes:', error);
             }
-          });
 
-          // Unmark remote change
-          isRemoteChangeRef.current = false;
-        } else if (message.type === 'cursor') {
-          // Handle cursor updates from other users
-          const { userId, userName, userColor, x, y } = message;
-
-          // Don't show our own cursor
-          if (userId === USER_ID) return;
-
-          // Create or update presence record for this user
-          const presenceId = InstancePresenceRecordType.createId(userId);
-          const currentPageId = editor.getCurrentPageId();
-
-          const presence = {
-            id: presenceId,
-            typeName: 'instance_presence' as const,
-            userId,
-            userName,
-            currentPageId,
-            cursor: { x, y, type: 'default' as const, rotation: 0 },
-            color: userColor,
-            camera: { x: 0, y: 0, z: 1 },
-            selectedShapeIds: [],
-            brush: null,
-            scribbles: [],
-            screenBounds: { x: 0, y: 0, w: 1920, h: 1080 },
-            followingUserId: null,
-            meta: {},
-            chatMessage: '',
-            lastActivityTimestamp: Date.now(),
-          };
-
-          isRemoteChangeRef.current = true;
-          editor.store.mergeRemoteChanges(() => {
-            editor.store.put([presence]);
-          });
-          isRemoteChangeRef.current = false;
-        } else if (message.type === 'user-joined') {
-          // Add user to connected users list
-          const newUser: ConnectedUser = {
-            id: message.userId,
-            name: message.userName,
-            color: message.userColor,
-          };
-          setConnectedUsers(prev => [...prev, newUser]);
-
-          // Broadcast our current cursor position to help new user see us immediately
-          const ws = wsRef.current;
-          if (ws && ws.readyState === WebSocket.OPEN && editor) {
-            try {
-              const currentPagePoint = editor.inputs.currentPagePoint;
-              ws.send(JSON.stringify({
-                type: 'cursor',
-                userId: USER_ID,
-                userName: USER_NAME,
-                userColor: USER_COLOR,
-                x: currentPagePoint.x,
-                y: currentPagePoint.y,
-              }));
-            } catch (error) {
-              console.error('[WS] Error sending cursor on user-joined:', error);
-            }
+          // ── user-left ────────────────────────────────────────────────────
+          } else if (message.type === 'user-left') {
+            const presenceId = InstancePresenceRecordType.createId(message.userId);
+            isRemoteChangeRef.current = true;
+            editor.store.mergeRemoteChanges(() => {
+              try {
+                editor.store.remove([presenceId]);
+              } finally {
+                isRemoteChangeRef.current = false;
+              }
+            });
+            setConnectedUsers(prev => prev.filter(u => u.id !== message.userId));
           }
-        } else if (message.type === 'user-left') {
-          // Remove presence when user leaves
-          const presenceId = InstancePresenceRecordType.createId(message.userId);
-          isRemoteChangeRef.current = true;
-          editor.store.mergeRemoteChanges(() => {
-            editor.store.remove([presenceId]);
-          });
-          isRemoteChangeRef.current = false;
-
-          // Remove user from connected users list
-          setConnectedUsers(prev => prev.filter(u => u.id !== message.userId));
+        } catch (error) {
+          console.error('[WS] Error parsing message:', error);
         }
-      } catch (error) {
-        console.error('[WS] Error parsing message:', error);
-      }
+      };
     };
 
-  };
-
-  // Connect to WebSocket when authenticated
-  useEffect(() => {
-    // Only connect if user is signed in and has user data
-    if (!isSignedIn || !USER_ID) {
-      console.log('[WS] Skipping connection - user not authenticated');
-      return;
-    }
-
-    console.log('[WS] User authenticated, connecting...');
+    connectRef.current = connectWebSocket;
     connectWebSocket();
 
     return () => {
-      console.log('[WS] Cleaning up WebSocket');
+      // ── Cleanup: mark this effect instance as dead ────────────────────
+      // `destroyed = true` is set BEFORE socket.close() is called.
+      // WebSocket's onclose fires asynchronously, so by the time it runs,
+      // `destroyed` is already true and no reconnect will be scheduled.
+      //
+      // This is the key to React StrictMode correctness: the first mount's
+      // onclose (which fires after cleanup closes the socket) can never race
+      // against the second mount's fresh socket, because `destroyed` stops it
+      // dead before it can call setConnectionStatus or schedule a timeout.
+      destroyed = true;
+      connectRef.current = null;
 
-      // Clear any pending reconnection attempts
-      if (reconnectTimeoutRef.current) {
+      if (reconnectTimeoutRef.current !== null) {
         clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
 
-      // Close the WebSocket connection
       const ws = wsRef.current;
       if (ws) {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: 'disconnect',
-            userId: USER_ID,
-          }));
+          ws.send(JSON.stringify({ type: 'disconnect', userId: USER_ID }));
         }
         ws.close();
         wsRef.current = null;
       }
     };
-  }, [isSignedIn, USER_ID]); // Connect when auth state changes
+  }, [isSignedIn, USER_ID]); // eslint-disable-line react-hooks/exhaustive-deps
+  // USER_NAME / USER_COLOR / getToken intentionally omitted: they are stable
+  // within a session (USER_ID change triggers a full reconnect already) and
+  // including them would cause unnecessary reconnects on minor Clerk updates.
 
   // Set up editor listener when editor is ready
   const handleEditorMount = (editor: Editor) => {
@@ -543,17 +541,18 @@ function App() {
           <span>
             {connectionStatus === 'connected' && `Connected as ${USER_NAME}`}
             {connectionStatus === 'connecting' && 'Connecting to board...'}
-            {connectionStatus === 'disconnected' && 'Disconnected - reconnecting...'}
+            {connectionStatus === 'disconnected' && 'Disconnected — reconnecting...'}
+            {connectionStatus === 'failed' && 'Connection failed — click Reconnect to try again'}
           </span>
-          {connectionStatus === 'disconnected' && (
+          {(connectionStatus === 'disconnected' || connectionStatus === 'failed') && (
             <button
               onClick={() => {
-                console.log('[WS] Manual reconnect triggered');
-                if (reconnectTimeoutRef.current) {
+                if (reconnectTimeoutRef.current !== null) {
                   clearTimeout(reconnectTimeoutRef.current);
+                  reconnectTimeoutRef.current = null;
                 }
                 reconnectAttemptsRef.current = 0;
-                connectWebSocket();
+                connectRef.current?.();
               }}
               style={{
                 padding: '4px 12px',
