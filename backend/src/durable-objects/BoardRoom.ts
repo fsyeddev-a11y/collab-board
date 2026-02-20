@@ -15,6 +15,8 @@
 // WebSocket authentication is needed.  This keeps cold-start cost low and
 // prevents CJS/ESM interop issues in the vitest-pool-workers test environment.
 
+import { ClientWSMessageSchema } from '@collabboard/shared';
+
 interface User {
   id: string;
   name: string;
@@ -81,11 +83,18 @@ export class BoardRoom {
         )
       `);
 
-      // Load all records into memory for fast access
+      // One-time cleanup: remove any instance_presence records that were
+      // incorrectly persisted before this fix was applied.
+      sql.exec(`DELETE FROM board_records WHERE type = 'instance_presence'`);
+
+      // Load all records into memory for fast access.
+      // instance_presence records are ephemeral and must never be loaded into
+      // boardState — doing so would send stale ghost-cursors to new joiners.
       const records = sql.exec(`SELECT id, data FROM board_records`).toArray();
 
       for (const row of records) {
         const record = JSON.parse(row.data as string);
+        if (record.typeName === 'instance_presence') continue;
         this.boardState.set(row.id as string, record);
       }
 
@@ -140,7 +149,34 @@ export class BoardRoom {
     // Handle incoming messages
     webSocket.addEventListener('message', async (event) => {
       try {
-        const message = JSON.parse(event.data as string);
+        // ── Step 1: parse JSON ────────────────────────────────────────────────
+        let rawMessage: unknown;
+        try {
+          rawMessage = JSON.parse(event.data as string);
+        } catch {
+          webSocket.send(JSON.stringify({
+            type: 'error',
+            message: 'Invalid JSON',
+            error: 'Message could not be parsed as JSON',
+          }));
+          return;
+        }
+
+        // ── Step 2: validate against the shared Zod schema ───────────────────
+        // This enforces the contract for every message type before any handler
+        // logic runs.  Unknown / malformed messages are rejected immediately.
+        const parseResult = ClientWSMessageSchema.safeParse(rawMessage);
+        if (!parseResult.success) {
+          console.warn('[BoardRoom] Invalid message schema:', parseResult.error.flatten());
+          webSocket.send(JSON.stringify({
+            type: 'error',
+            message: 'Invalid message format',
+            error: parseResult.error.message,
+          }));
+          return;
+        }
+
+        const message = parseResult.data;
         console.log('[BoardRoom] Received:', message.type, 'from', userId || 'unknown');
 
         switch (message.type) {
@@ -242,12 +278,16 @@ export class BoardRoom {
               return;
             }
 
-            // Broadcast cursor position to all other users
+            // Always use the server-verified identity stored at connect time.
+            // The client-supplied userId/userName/userColor fields in the cursor
+            // message payload are intentionally ignored — a client cannot spoof
+            // another user's identity by crafting those fields.
+            const cursorUser = this.users.get(userId);
             this.broadcast({
               type: 'cursor',
-              userId: message.userId,
-              userName: message.userName,
-              userColor: message.userColor,
+              userId: userId,
+              userName: cursorUser?.name ?? '',
+              userColor: cursorUser?.color ?? '',
               x: message.x,
               y: message.y,
             }, userId);
@@ -270,9 +310,17 @@ export class BoardRoom {
               removed: Object.keys(changes.removed || {}).length,
             });
 
-            // Apply changes to board state and save to SQLite (non-blocking)
+            // Apply changes to board state and persist to SQLite.
+            //
+            // instance_presence records are tldraw's ephemeral per-user cursor
+            // and selection state.  They must NOT be written to boardState or
+            // SQLite — persisting them causes new joiners to receive stale
+            // ghost-cursors for users who are long gone.  They are still
+            // included in the broadcast below so live peers see real-time
+            // selection highlights.
             if (changes.added) {
               for (const [id, record] of Object.entries(changes.added)) {
+                if (record.typeName === 'instance_presence') continue;
                 this.boardState.set(id, record);
                 this.saveRecord(id, record).catch(err =>
                   console.error('[BoardRoom] Error saving added record:', err)
@@ -282,6 +330,7 @@ export class BoardRoom {
 
             if (changes.updated) {
               for (const [id, record] of Object.entries(changes.updated)) {
+                if (record.typeName === 'instance_presence') continue;
                 this.boardState.set(id, record);
                 this.saveRecord(id, record).catch(err =>
                   console.error('[BoardRoom] Error saving updated record:', err)
@@ -309,8 +358,6 @@ export class BoardRoom {
             break;
           }
 
-          default:
-            console.warn('[BoardRoom] Unknown message type:', message.type);
         }
       } catch (error) {
         console.error('[BoardRoom] Error handling message:', error);

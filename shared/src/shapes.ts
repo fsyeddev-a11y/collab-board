@@ -1,97 +1,130 @@
 import { z } from 'zod';
 
 /**
- * Zod schemas for tldraw shapes
- * These schemas ensure type safety between frontend canvas and backend AI agent
+ * Zod schemas for tldraw shape records.
+ *
+ * These match tldraw's actual internal record format so that AI-generated
+ * shapes (Phase 2) can be placed directly onto the canvas without any
+ * transformation.
+ *
+ * Key structural rules from tldraw's store:
+ *  - Every shape record has `typeName: 'shape'` (the record layer)
+ *  - `type` is the shape-specific discriminator: 'note' | 'geo' | 'text' | 'frame'
+ *  - All shape-specific properties live inside `props: {}`
+ *  - `parentId` is the page ID that owns this shape (e.g. "page:page")
+ *  - `index` is a fractional index string for z-ordering (e.g. "a1")
  */
 
-// Base shape properties that all tldraw shapes share
+// tldraw's named colour palette
+const TLColorSchema = z.enum([
+  'black', 'grey', 'light-violet', 'violet',
+  'blue', 'light-blue', 'yellow', 'orange',
+  'green', 'light-green', 'light-red', 'red', 'white',
+]);
+
+const TLSizeSchema = z.enum(['sm', 'm', 'l', 'xl']);
+const TLFontSchema = z.enum(['draw', 'sans', 'serif', 'mono']);
+const TLAlignSchema = z.enum(['left', 'middle', 'right']);
+const TLVerticalAlignSchema = z.enum(['start', 'middle', 'end']);
+const TLDashSchema = z.enum(['draw', 'solid', 'dashed', 'dotted']);
+const TLFillSchema = z.enum(['none', 'solid', 'semi', 'pattern', 'fill']);
+
+// Fields present on every tldraw shape record
 export const BaseShapeSchema = z.object({
-  id: z.string(),
-  type: z.string(),
+  id: z.string(),            // e.g. "shape:abc123"
+  typeName: z.literal('shape'),
+  parentId: z.string(),      // e.g. "page:page"
+  index: z.string(),         // fractional index e.g. "a1"
   x: z.number(),
   y: z.number(),
   rotation: z.number().default(0),
   isLocked: z.boolean().default(false),
   opacity: z.number().min(0).max(1).default(1),
+  meta: z.record(z.unknown()).default({}),
 });
 
-// Sticky Note Shape
-export const StickyNoteSchema = BaseShapeSchema.extend({
-  type: z.literal('sticky-note'),
-  text: z.string(),
-  color: z.enum(['yellow', 'blue', 'green', 'pink', 'purple', 'red', 'orange']).default('yellow'),
-  width: z.number().default(200),
-  height: z.number().default(200),
+// ── Note shape ────────────────────────────────────────────────────────────────
+// tldraw's built-in sticky note.  type = 'note' (NOT 'sticky-note').
+export const NoteShapeSchema = BaseShapeSchema.extend({
+  type: z.literal('note'),
+  props: z.object({
+    color: TLColorSchema.default('yellow'),
+    size: TLSizeSchema.default('m'),
+    font: TLFontSchema.default('sans'),
+    align: TLAlignSchema.default('middle'),
+    verticalAlign: TLVerticalAlignSchema.default('middle'),
+    growY: z.number().default(0),
+    url: z.string().default(''),
+    text: z.string().default(''),
+  }),
 });
 
-// Rectangle Shape
-export const RectangleSchema = BaseShapeSchema.extend({
-  type: z.literal('rectangle'),
-  width: z.number(),
-  height: z.number(),
-  fill: z.string().default('#cccccc'),
-  stroke: z.string().default('#000000'),
-  strokeWidth: z.number().default(2),
+// ── Geo shape ─────────────────────────────────────────────────────────────────
+// Covers rectangles, ellipses and every other geometric primitive.
+// type = 'geo'; the specific geometry is selected via props.geo.
+// Previously this project incorrectly used type = 'rectangle' / 'circle'.
+export const GeoShapeSchema = BaseShapeSchema.extend({
+  type: z.literal('geo'),
+  props: z.object({
+    geo: z.enum([
+      'rectangle', 'ellipse', 'triangle', 'diamond',
+      'pentagon', 'hexagon', 'octagon', 'star',
+      'rhombus', 'rhombus-2', 'oval', 'trapezoid',
+      'arrow-right', 'arrow-left', 'arrow-up', 'arrow-down',
+      'x-box', 'check-box', 'heart', 'cloud',
+    ]).default('rectangle'),
+    w: z.number().default(100),
+    h: z.number().default(100),
+    color: TLColorSchema.default('black'),
+    fill: TLFillSchema.default('none'),
+    dash: TLDashSchema.default('draw'),
+    size: TLSizeSchema.default('m'),
+    font: TLFontSchema.default('sans'),
+    text: z.string().default(''),
+    align: TLAlignSchema.default('middle'),
+    verticalAlign: TLVerticalAlignSchema.default('middle'),
+    growY: z.number().default(0),
+    url: z.string().default(''),
+  }),
 });
 
-// Circle Shape
-export const CircleSchema = BaseShapeSchema.extend({
-  type: z.literal('circle'),
-  radius: z.number(),
-  fill: z.string().default('#cccccc'),
-  stroke: z.string().default('#000000'),
-  strokeWidth: z.number().default(2),
-});
-
-// Line/Connector Shape
-export const LineSchema = BaseShapeSchema.extend({
-  type: z.literal('line'),
-  points: z.array(z.object({
-    x: z.number(),
-    y: z.number(),
-  })),
-  stroke: z.string().default('#000000'),
-  strokeWidth: z.number().default(2),
-  startArrow: z.boolean().default(false),
-  endArrow: z.boolean().default(false),
-});
-
-// Text Shape
-export const TextSchema = BaseShapeSchema.extend({
+// ── Text shape ────────────────────────────────────────────────────────────────
+export const TextShapeSchema = BaseShapeSchema.extend({
   type: z.literal('text'),
-  text: z.string(),
-  fontSize: z.number().default(16),
-  fontFamily: z.enum(['sans', 'serif', 'mono']).default('sans'),
-  color: z.string().default('#000000'),
-  align: z.enum(['left', 'center', 'right']).default('left'),
+  props: z.object({
+    text: z.string().default(''),
+    color: TLColorSchema.default('black'),
+    size: TLSizeSchema.default('m'),
+    font: TLFontSchema.default('sans'),
+    align: TLAlignSchema.default('middle'),
+    w: z.number().default(100),
+    autoSize: z.boolean().default(true),
+    url: z.string().default(''),
+  }),
 });
 
-// Frame Shape (for grouping content)
-export const FrameSchema = BaseShapeSchema.extend({
+// ── Frame shape ───────────────────────────────────────────────────────────────
+export const FrameShapeSchema = BaseShapeSchema.extend({
   type: z.literal('frame'),
-  width: z.number(),
-  height: z.number(),
-  name: z.string().default('Frame'),
-  backgroundColor: z.string().default('#ffffff'),
+  props: z.object({
+    w: z.number().default(200),
+    h: z.number().default(200),
+    name: z.string().default('Frame'),
+  }),
 });
 
-// Union of all shape types
+// ── Union ─────────────────────────────────────────────────────────────────────
 export const ShapeSchema = z.discriminatedUnion('type', [
-  StickyNoteSchema,
-  RectangleSchema,
-  CircleSchema,
-  LineSchema,
-  TextSchema,
-  FrameSchema,
+  NoteShapeSchema,
+  GeoShapeSchema,
+  TextShapeSchema,
+  FrameShapeSchema,
 ]);
 
 // Type exports
 export type BaseShape = z.infer<typeof BaseShapeSchema>;
-export type StickyNote = z.infer<typeof StickyNoteSchema>;
-export type Rectangle = z.infer<typeof RectangleSchema>;
-export type Circle = z.infer<typeof CircleSchema>;
-export type Line = z.infer<typeof LineSchema>;
-export type Text = z.infer<typeof TextSchema>;
-export type Frame = z.infer<typeof FrameSchema>;
+export type NoteShape = z.infer<typeof NoteShapeSchema>;
+export type GeoShape = z.infer<typeof GeoShapeSchema>;
+export type TextShape = z.infer<typeof TextShapeSchema>;
+export type FrameShape = z.infer<typeof FrameShapeSchema>;
 export type Shape = z.infer<typeof ShapeSchema>;
