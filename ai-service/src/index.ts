@@ -62,9 +62,7 @@ app.post(
 
       const response = AIServiceResponseSchema.parse({
         toolCalls,
-        modelUsed:
-          process.env.OPENROUTER_MODEL ??
-          'google/gemini-2.5-flash-preview-05-20',
+        modelUsed: process.env.OPENROUTER_MODEL || 'openai/gpt-oss-120b:free',
       });
 
       return c.json(response);
