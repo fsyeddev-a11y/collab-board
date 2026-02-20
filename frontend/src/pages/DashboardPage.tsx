@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useUser, useAuth, useOrganization, OrganizationSwitcher, UserButton } from '@clerk/clerk-react';
+import { useAuth, useOrganization, OrganizationSwitcher, UserButton } from '@clerk/clerk-react';
 import { useNavigate } from 'react-router-dom';
 
 interface Board {
@@ -14,7 +14,6 @@ interface Board {
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8787';
 
 export function DashboardPage() {
-  const { user } = useUser();
   const { getToken } = useAuth();
   const { organization } = useOrganization();
   const navigate = useNavigate();
