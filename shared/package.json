@@ -2,6 +2,7 @@
   "name": "@collabboard/shared",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "Shared types and Zod schemas for CollabBoard",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

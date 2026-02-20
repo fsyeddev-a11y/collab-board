@@ -1,27 +1,103 @@
 import { z } from 'zod';
-import { ShapeSchema } from './shapes';
+import { ShapeSchema } from './shapes.js';
 
 /**
- * Zod schemas for API requests and responses
- * Used for communication between frontend and Cloudflare Worker backend
+ * Zod schemas for API requests and responses.
+ *
+ * Service boundary contracts:
+ *   Browser → CF Worker:          AIGenerateRequestSchema
+ *   CF Worker → Hono AI Service:  AIServiceRequestSchema  (same payload + internal auth header)
+ *   Hono AI Service → CF Worker:  AIServiceResponseSchema (array of tool executions)
+ *   CF Worker → Browser:          AIGenerateResponseSchema
  */
 
-// AI Generation Request (Phase 2 - prepared but not implemented yet)
-export const AIGenerationRequestSchema = z.object({
-  prompt: z.string().min(1).max(1000),
+// ── Browser → CF Worker ───────────────────────────────────────────────────────
+export const AIGenerateRequestSchema = z.object({
+  prompt: z.string().min(1).max(2000),
   boardId: z.string(),
-  contextShapes: z.array(ShapeSchema).optional(),
+  boardState: z.array(z.record(z.unknown())).optional(), // loose — just context for the AI
 });
 
-export type AIGenerationRequest = z.infer<typeof AIGenerationRequestSchema>;
+export type AIGenerateRequest = z.infer<typeof AIGenerateRequestSchema>;
 
-// AI Generation Response (Phase 2 - prepared but not implemented yet)
-export const AIGenerationResponseSchema = z.object({
-  shapes: z.array(ShapeSchema),
-  message: z.string().optional(),
+// ── CF Worker → Hono AI Service ───────────────────────────────────────────────
+// Identical payload; the Worker adds X-Internal-Secret as a header (not in body).
+export const AIServiceRequestSchema = AIGenerateRequestSchema;
+export type AIServiceRequest = AIGenerateRequest;
+
+// ── Tool execution records returned by the agent ──────────────────────────────
+//
+// Each entry is one planned operation.  The agent assigns ref IDs (e.g.
+// "ref:frame_1") so later steps can reference earlier ones.  The frontend
+// resolves refs to real tldraw shape IDs when applying the calls to the canvas.
+
+// tldraw colour palette shared between agent tool schemas and frontend
+export const TLToolColorSchema = z.enum([
+  'yellow', 'green', 'blue', 'orange', 'red', 'violet',
+  'light-blue', 'light-green', 'light-red', 'light-violet',
+  'grey', 'white',
+]);
+
+export const CreateFrameToolCallSchema = z.object({
+  tool: z.literal('createFrame'),
+  ref: z.string(),                   // e.g. "ref:frame_1"
+  label: z.string(),
+  position: z.enum(['auto', 'left', 'center', 'right', 'far-right']).default('auto'),
+  size: z.enum(['small', 'medium', 'large']).default('medium'),
 });
 
-export type AIGenerationResponse = z.infer<typeof AIGenerationResponseSchema>;
+export const CreateLayoutToolCallSchema = z.object({
+  tool: z.literal('createLayout'),
+  ref: z.string(),                   // e.g. "ref:layout_1"
+  layoutType: z.enum(['grid', 'columns', 'mindmap', 'timeline', 'list']),
+  items: z.array(z.object({
+    text: z.string(),
+    color: TLToolColorSchema.nullable().optional(),
+  })),
+  frameLabel: z.string().nullable().optional(),
+  frameRef: z.string().nullable().optional(),   // ref of auto-created or targeted frame
+  targetFrameRef: z.string().nullable().optional(), // ref to nest inside an existing frame
+});
+
+export const CreateConnectorToolCallSchema = z.object({
+  tool: z.literal('createConnector'),
+  ref: z.string(),
+  fromRef: z.string(),               // shape ID or ref ID
+  toRef: z.string(),
+  label: z.string().nullable().optional(),
+});
+
+export const MoveObjectToolCallSchema = z.object({
+  tool: z.literal('moveObject'),
+  shapeId: z.string(),
+  direction: z.enum(['left', 'right', 'up', 'down']),
+  distance: z.enum(['small', 'medium', 'large']).default('medium'),
+});
+
+export const ToolCallSchema = z.discriminatedUnion('tool', [
+  CreateFrameToolCallSchema,
+  CreateLayoutToolCallSchema,
+  CreateConnectorToolCallSchema,
+  MoveObjectToolCallSchema,
+]);
+
+export type ToolCall = z.infer<typeof ToolCallSchema>;
+export type CreateFrameToolCall = z.infer<typeof CreateFrameToolCallSchema>;
+export type CreateLayoutToolCall = z.infer<typeof CreateLayoutToolCallSchema>;
+export type CreateConnectorToolCall = z.infer<typeof CreateConnectorToolCallSchema>;
+export type MoveObjectToolCall = z.infer<typeof MoveObjectToolCallSchema>;
+
+// ── Hono AI Service → CF Worker ───────────────────────────────────────────────
+export const AIServiceResponseSchema = z.object({
+  toolCalls: z.array(ToolCallSchema),
+  modelUsed: z.string().optional(),   // e.g. "google/gemini-2.0-flash-exp:free"
+});
+
+export type AIServiceResponse = z.infer<typeof AIServiceResponseSchema>;
+
+// ── CF Worker → Browser ───────────────────────────────────────────────────────
+export const AIGenerateResponseSchema = AIServiceResponseSchema;
+export type AIGenerateResponse = AIServiceResponse;
 
 // A tldraw record as transmitted over WebSocket.
 // Uses passthrough() to allow arbitrary shape-specific fields beyond id and typeName.

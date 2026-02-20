@@ -14,6 +14,7 @@ import {
   TextToolbarItem,
   FrameToolbarItem,
   NoteToolbarItem,
+  RectangleToolbarItem,
   TldrawUiMenuGroup,
   TldrawUiMenuItem,
   useEditor,
@@ -24,6 +25,7 @@ import { useUser, useAuth, UserButton } from '@clerk/clerk-react';
 import { shouldSendCursor, CURSOR_THROTTLE_MS } from '../utils/cursorThrottle';
 import { patchNoteCloneHandle } from '../utils/noteArrowOverride';
 import { removeFrameKeepContents, deleteFrameWithContents } from '../utils/frameActions';
+import { resolveToolCalls } from '../utils/aiResolver';
 import 'tldraw/tldraw.css';
 
 // ── Custom context menu ───────────────────────────────────────────────────────
@@ -76,7 +78,7 @@ function FrameContextMenu() {
 
 // ── Custom toolbar ────────────────────────────────────────────────────────────
 // Defined at module level to prevent remounts on re-render.
-// Order: Select → Hand → Draw → Eraser → Arrow → Text → Frame → Note
+// Order: Select → Hand → Draw → Eraser → Arrow → Text → Frame → Note → Rectangle
 function CustomToolbar() {
   return (
     <DefaultToolbar>
@@ -88,6 +90,7 @@ function CustomToolbar() {
       <TextToolbarItem />
       <FrameToolbarItem />
       <NoteToolbarItem />
+      <RectangleToolbarItem />
     </DefaultToolbar>
   );
 }
@@ -125,6 +128,10 @@ export function BoardPage() {
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'failed'>('connecting');
   const [connectedUsers, setConnectedUsers] = useState<ConnectedUser[]>([]);
   const [isPresenceExpanded, setIsPresenceExpanded] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const editorRef = useRef<Editor | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const isRemoteChangeRef = useRef(false);
@@ -141,6 +148,55 @@ export function BoardPage() {
     ? (user.fullName || user.username || user.emailAddresses[0]?.emailAddress || 'Anonymous')
     : '';
   const USER_COLOR = USER_ID ? getUserColor(USER_ID) : '#666';
+
+  // ── AI generation handler ──────────────────────────────────────────────────
+
+  const handleAiGenerate = async () => {
+    const prompt = aiPrompt.trim();
+    if (!prompt || aiLoading || !editorRef.current) return;
+
+    setAiLoading(true);
+    setAiError(null);
+
+    try {
+      const token = await getToken({ skipCache: true });
+      if (!token) { setAiError('Not authenticated'); return; }
+
+      // Gather current board shapes as context for the agent.
+      const shapes = editorRef.current.getCurrentPageShapes().map((s) => ({
+        id: s.id,
+        type: s.type,
+        x: s.x,
+        y: s.y,
+        props: (s as unknown as Record<string, unknown>).props,
+      }));
+
+      const res = await fetch(`${API_URL}/api/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ prompt, boardId, boardState: shapes }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as Record<string, string>).error ?? `HTTP ${res.status}`);
+      }
+
+      const data = await res.json() as { toolCalls: unknown[] };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      resolveToolCalls(editorRef.current, data.toolCalls as any);
+      setAiPrompt('');
+      setAiPanelOpen(false);
+    } catch (err) {
+      console.error('[AI] Generation failed:', err);
+      setAiError(err instanceof Error ? err.message : 'Generation failed');
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!isSignedIn || !USER_ID || !boardId) return;
@@ -560,8 +616,83 @@ export function BoardPage() {
       </div>
 
       {/* ── Canvas ──────────────────────────────────────────────────────────── */}
-      <div style={{ flex: 1 }}>
+      <div style={{ flex: 1, position: 'relative' }}>
         <Tldraw components={TLDRAW_COMPONENTS} onMount={handleEditorMount} />
+
+        {/* ── AI Prompt Panel ──────────────────────────────────────────────── */}
+        {!aiPanelOpen && (
+          <button
+            onClick={() => setAiPanelOpen(true)}
+            style={{
+              position: 'absolute', bottom: 20, right: 20, zIndex: 1000,
+              width: 48, height: 48, borderRadius: '50%',
+              background: '#6366f1', color: 'white', border: 'none',
+              fontSize: 20, fontWeight: 700, cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(99,102,241,0.4)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+            title="AI Generate"
+          >
+            AI
+          </button>
+        )}
+
+        {aiPanelOpen && (
+          <div style={{
+            position: 'absolute', bottom: 20, right: 20, zIndex: 1000,
+            width: 380, background: 'white', borderRadius: 12,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+            padding: 16, display: 'flex', flexDirection: 'column', gap: 10,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontWeight: 600, fontSize: 14, color: '#1e1e1e' }}>AI Assistant</span>
+              <button
+                onClick={() => { setAiPanelOpen(false); setAiError(null); }}
+                style={{
+                  background: 'none', border: 'none', fontSize: 18,
+                  cursor: 'pointer', color: '#888', padding: '0 4px',
+                }}
+              >
+                x
+              </button>
+            </div>
+
+            <textarea
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAiGenerate(); }
+              }}
+              placeholder="e.g. Set up a retrospective board with What Went Well, What Didn't, and Action Items columns"
+              rows={3}
+              disabled={aiLoading}
+              style={{
+                width: '100%', padding: '10px 12px', borderRadius: 8,
+                border: '1px solid #ddd', fontSize: 13, fontFamily: 'inherit',
+                resize: 'vertical', outline: 'none', boxSizing: 'border-box',
+              }}
+            />
+
+            {aiError && (
+              <div style={{ color: '#ef4444', fontSize: 12, padding: '4px 0' }}>
+                {aiError}
+              </div>
+            )}
+
+            <button
+              onClick={handleAiGenerate}
+              disabled={aiLoading || !aiPrompt.trim()}
+              style={{
+                padding: '10px 16px', borderRadius: 8, border: 'none',
+                background: aiLoading ? '#a5b4fc' : '#6366f1',
+                color: 'white', fontWeight: 600, fontSize: 13,
+                cursor: aiLoading ? 'wait' : 'pointer',
+              }}
+            >
+              {aiLoading ? 'Generating...' : 'Generate'}
+            </button>
+          </div>
+        )}
       </div>
 
       <style>{`

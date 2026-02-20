@@ -24,8 +24,9 @@ database_name = "collabboard-db"
 database_id   = "76fd5028-8484-4517-aff5-ccbd4708a76b"
 
 # Secrets — set via `wrangler secret put <KEY>` (never committed)
-# CLERK_SECRET_KEY  — Clerk JWT verification
-# ANTHROPIC_API_KEY — Claude API (Phase 4)
+# CLERK_SECRET_KEY   — Clerk JWT verification
+# AI_SERVICE_URL     — Internal URL of the Hono AI microservice on Render
+# AI_SERVICE_SECRET  — Shared secret sent as X-Internal-Secret to the Hono service
 
 [env.development]
 name = "collabboard-backend-dev"

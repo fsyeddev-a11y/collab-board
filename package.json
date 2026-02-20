@@ -6,15 +6,18 @@
   "workspaces": [
     "frontend",
     "backend",
+    "ai-service",
     "shared"
   ],
   "scripts": {
     "dev:frontend": "npm run dev --workspace=frontend",
     "dev:backend": "npm run dev --workspace=backend",
+    "dev:ai": "npm run dev --workspace=collabboard-ai-service",
     "build:frontend": "npm run build --workspace=frontend",
     "build:backend": "npm run build --workspace=backend",
+    "build:ai": "npm run build --workspace=collabboard-ai-service",
     "build:shared": "npm run build --workspace=shared",
-    "build": "npm run build:shared && npm run build:frontend && npm run build:backend",
+    "build": "npm run build:shared && npm run build:frontend && npm run build:backend && npm run build:ai",
     "deploy:frontend": "npm run deploy --workspace=frontend",
     "deploy:backend": "npm run deploy --workspace=backend",
     "type-check": "npm run type-check --workspace=frontend && npm run type-check --workspace=backend",

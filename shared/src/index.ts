@@ -4,5 +4,5 @@
  * flowing between frontend, backend, and AI agent
  */
 
-export * from './shapes';
-export * from './api';
+export * from './shapes.js';
+export * from './api.js';

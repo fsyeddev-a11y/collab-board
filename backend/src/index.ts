@@ -30,7 +30,8 @@ export interface Env {
   DB: D1Database;
   CLERK_PUBLISHABLE_KEY: string;
   CLERK_SECRET_KEY: string;
-  ANTHROPIC_API_KEY: string;
+  AI_SERVICE_URL: string;
+  AI_SERVICE_SECRET: string;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -236,9 +237,34 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return env.BOARD_ROOM.get(doId).fetch(request);
     }
 
-    // AI generation (Phase 4)
+    // ── POST /api/generate — proxy to Hono AI service ─────────────────────────
     if (url.pathname === '/api/generate' && request.method === 'POST') {
-      return json({ error: 'AI generation not yet implemented', phase: 'Phase 4' }, 501);
+      const claims = await verifyClerkRequest(request, env.CLERK_SECRET_KEY);
+      if (!claims) return apiError('Unauthorized', 401);
+
+      if (!env.AI_SERVICE_URL || !env.AI_SERVICE_SECRET) {
+        return apiError('AI service not configured', 503);
+      }
+
+      let body: unknown;
+      try { body = await request.json(); } catch { return apiError('Invalid JSON body', 400); }
+
+      // Forward to the Hono AI service with internal auth header.
+      const aiResponse = await fetch(`${env.AI_SERVICE_URL}/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Secret': env.AI_SERVICE_SECRET,
+        },
+        body: JSON.stringify(body),
+      });
+
+      // Pass through the AI service response (status + body).
+      const aiBody = await aiResponse.text();
+      return new Response(aiBody, {
+        status: aiResponse.status,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
     }
 
     return new Response('Not Found', { status: 404, headers: CORS_HEADERS });
