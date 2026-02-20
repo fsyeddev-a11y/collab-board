@@ -31,6 +31,12 @@ export interface ClerkClaims {
    * null when the claim is absent (e.g. templates not yet updated).
    */
   email: string | null;
+  /**
+   * The user's role in their active organization (`o.rol` claim in Clerk v2).
+   * Typical values: 'admin', 'member', 'org:admin', 'org:member'.
+   * null when the user has no active organization.
+   */
+  orgRole: string | null;
 }
 
 async function extractClaims(
@@ -53,7 +59,9 @@ async function extractClaims(
     const orgFromNested = typeof oObject?.['id'] === 'string' ? oObject['id'] : null;
     const orgId = orgFromFlat ?? orgFromNested;
     const email = typeof raw['email'] === 'string' ? raw['email'] : null;
-    return { userId: payload.sub, orgId, email };
+    // Clerk v2: role lives at o.rol ('admin' | 'member' | custom roles)
+    const orgRole = typeof oObject?.['rol'] === 'string' ? oObject['rol'] : null;
+    return { userId: payload.sub, orgId, email, orgRole };
   } catch {
     return null;
   }

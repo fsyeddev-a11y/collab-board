@@ -39,7 +39,7 @@ const CORS_HEADERS = {
   // Tighten to your Cloudflare Pages domain in production, e.g.:
   //   'Access-Control-Allow-Origin': 'https://collabboard.pages.dev'
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 } as const;
 
@@ -151,6 +151,44 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
            VALUES (?1, ?2, ?3)`,
         )
         .bind(boardId, inviteeEmail, Date.now())
+        .run();
+
+      return json({ success: true });
+    }
+
+    // ── DELETE /api/boards/:id — delete a board ──────────────────────────────
+    const boardMatch = url.pathname.match(/^\/api\/boards\/([\w-]+)$/);
+    if (boardMatch && request.method === 'DELETE') {
+      const claims = await verifyClerkRequest(request, env.CLERK_SECRET_KEY);
+      if (!claims) return apiError('Unauthorized', 401);
+
+      const boardId = boardMatch[1];
+
+      // Security gate: only an ADMIN of the org that owns the board may delete.
+      //   - Guests (no orgId) → 403
+      //   - Org members with 'member' role → 403
+      //   - Org admins ('admin' or 'org:admin') → proceed
+      if (!claims.orgId) {
+        return apiError('Forbidden: only organization admins can delete boards', 403);
+      }
+      const isAdmin = claims.orgRole === 'admin' || claims.orgRole === 'org:admin';
+      if (!isAdmin) {
+        return apiError('Forbidden: only organization admins can delete boards', 403);
+      }
+      const row = await env.DB
+        .prepare(`SELECT 1 FROM boards WHERE id = ?1 AND org_id = ?2`)
+        .bind(boardId, claims.orgId)
+        .first();
+      if (!row) {
+        // Either the board doesn't exist or belongs to a different org.
+        // Return 403 (not 404) to avoid leaking whether the board exists.
+        return apiError('Forbidden: board not found or you do not own it', 403);
+      }
+
+      // CASCADE on board_guests means guest rows are deleted automatically.
+      await env.DB
+        .prepare(`DELETE FROM boards WHERE id = ?1`)
+        .bind(boardId)
         .run();
 
       return json({ success: true });

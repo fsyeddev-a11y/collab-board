@@ -15,8 +15,11 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8787';
 
 export function DashboardPage() {
   const { getToken } = useAuth();
-  const { organization } = useOrganization();
+  const { organization, membership } = useOrganization();
   const navigate = useNavigate();
+
+  // True when the current user is an admin of the active org.
+  const isOrgAdmin = membership?.role === 'org:admin';
 
   const [boards, setBoards] = useState<Board[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,6 +31,13 @@ export function DashboardPage() {
   const [inviteTarget, setInviteTarget] = useState<string | null>(null);
   const [inviteeEmail, setInviteeEmail] = useState('');
   const [inviting, setInviting] = useState(false);
+  const [inviteSuccess, setInviteSuccess] = useState(false);
+
+  // Copy-link feedback: stores the boardId whose link was just copied
+  const [copiedBoardId, setCopiedBoardId] = useState<string | null>(null);
+
+  // Delete confirmation: stores the boardId awaiting confirmation
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Refetch whenever the active org changes
   useEffect(() => {
@@ -94,13 +104,42 @@ export function DashboardPage() {
         body: JSON.stringify({ email: inviteeEmail.trim() }),
       });
       if (!res.ok) throw new Error((await res.json() as { error: string }).error);
-      setInviteTarget(null);
-      setInviteeEmail('');
+      // Transition to the success/copy-link view instead of closing.
+      setInviteSuccess(true);
     } catch (e) {
       setErrorMsg(String(e));
     } finally {
       setInviting(false);
     }
+  }
+
+  function closeInviteModal() {
+    setInviteTarget(null);
+    setInviteeEmail('');
+    setInviteSuccess(false);
+  }
+
+  async function handleDeleteBoard(boardId: string) {
+    setConfirmDeleteId(null);
+    setErrorMsg(null);
+    try {
+      const token = await getToken();
+      const res = await fetch(`${API_URL}/api/boards/${boardId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error((await res.json() as { error: string }).error);
+      setBoards((prev) => prev.filter((b) => b.id !== boardId));
+    } catch (e) {
+      setErrorMsg(String(e));
+    }
+  }
+
+  function copyBoardLink(boardId: string) {
+    const link = `${window.location.origin}/board/${boardId}`;
+    navigator.clipboard.writeText(link);
+    setCopiedBoardId(boardId);
+    setTimeout(() => setCopiedBoardId(null), 2000);
   }
 
   return (
@@ -225,6 +264,39 @@ export function DashboardPage() {
                     </div>
                   </div>
 
+                  {/* ── Confirm-delete banner (shown inline on the card) ── */}
+                  {confirmDeleteId === board.id && (
+                    <div style={{
+                      background: '#fef2f2', border: '1px solid #fecaca',
+                      borderRadius: '6px', padding: '10px 12px',
+                      fontSize: '13px', color: '#991b1b',
+                    }}>
+                      <div style={{ marginBottom: '8px', fontWeight: '600' }}>Delete this board?</div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                          onClick={() => handleDeleteBoard(board.id)}
+                          style={{
+                            flex: 1, padding: '6px', background: '#dc2626', color: 'white',
+                            border: 'none', borderRadius: '5px', fontSize: '12px',
+                            fontWeight: '600', cursor: 'pointer',
+                          }}
+                        >
+                          Yes, delete
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteId(null)}
+                          style={{
+                            flex: 1, padding: '6px', background: 'white', color: '#374151',
+                            border: '1px solid #d1d5db', borderRadius: '5px',
+                            fontSize: '12px', cursor: 'pointer',
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button
                       onClick={() => navigate(`/board/${board.id}`)}
@@ -236,10 +308,10 @@ export function DashboardPage() {
                     >
                       Open
                     </button>
-                    {/* Only org members can invite guests to their own boards */}
-                    {board.org_id === organization?.id && (
+                    {/* Invite + Delete: only for org admins on their own boards */}
+                    {board.org_id === organization?.id && isOrgAdmin && (
                       <button
-                        onClick={() => { setInviteTarget(board.id); setInviteeEmail(''); }}
+                        onClick={() => { setInviteTarget(board.id); setInviteeEmail(''); setInviteSuccess(false); }}
                         style={{
                           padding: '8px 12px', background: 'white', color: '#374151',
                           border: '1px solid #d1d5db', borderRadius: '6px',
@@ -247,6 +319,32 @@ export function DashboardPage() {
                         }}
                       >
                         Invite
+                      </button>
+                    )}
+                    <button
+                      onClick={() => copyBoardLink(board.id)}
+                      title="Copy board link"
+                      style={{
+                        padding: '8px 12px', background: copiedBoardId === board.id ? '#f0fdf4' : 'white',
+                        color: copiedBoardId === board.id ? '#16a34a' : '#374151',
+                        border: `1px solid ${copiedBoardId === board.id ? '#86efac' : '#d1d5db'}`,
+                        borderRadius: '6px', fontSize: '13px', cursor: 'pointer',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      {copiedBoardId === board.id ? 'Copied!' : '🔗'}
+                    </button>
+                    {board.org_id === organization?.id && isOrgAdmin && (
+                      <button
+                        onClick={() => setConfirmDeleteId(board.id)}
+                        title="Delete board"
+                        style={{
+                          padding: '8px 10px', background: 'white', color: '#dc2626',
+                          border: '1px solid #fecaca', borderRadius: '6px',
+                          fontSize: '13px', cursor: 'pointer',
+                        }}
+                      >
+                        🗑
                       </button>
                     )}
                   </div>
@@ -267,51 +365,106 @@ export function DashboardPage() {
             background: 'white', borderRadius: '12px', padding: '28px',
             width: '100%', maxWidth: '420px', boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
           }}>
-            <h3 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: '700' }}>
-              Invite guest
-            </h3>
-            <p style={{ margin: '0 0 20px', color: '#6b7280', fontSize: '14px' }}>
-              Enter the email address of the person to invite. They will gain
-              access to this board without being added to your organization.
-            </p>
-            <form onSubmit={handleInviteGuest} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <input
-                type="email"
-                value={inviteeEmail}
-                onChange={(e) => setInviteeEmail(e.target.value)}
-                placeholder="guest@example.com"
-                style={{
-                  padding: '10px 14px', border: '1px solid #d1d5db',
-                  borderRadius: '6px', fontSize: '14px', outline: 'none',
-                }}
-              />
-              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                <button
-                  type="button"
-                  onClick={() => { setInviteTarget(null); setInviteeEmail(''); }}
-                  style={{
-                    padding: '8px 16px', background: 'white', color: '#374151',
-                    border: '1px solid #d1d5db', borderRadius: '6px',
-                    fontSize: '14px', cursor: 'pointer',
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={inviting || !inviteeEmail.trim()}
-                  style={{
-                    padding: '8px 16px', background: '#6366f1', color: 'white',
-                    border: 'none', borderRadius: '6px', fontSize: '14px',
-                    fontWeight: '600',
-                    cursor: inviting || !inviteeEmail.trim() ? 'not-allowed' : 'pointer',
-                    opacity: inviting || !inviteeEmail.trim() ? 0.6 : 1,
-                  }}
-                >
-                  {inviting ? 'Inviting…' : 'Invite'}
-                </button>
-              </div>
-            </form>
+
+            {inviteSuccess ? (
+              /* ── Success view: show copyable board link ── */
+              <>
+                <h3 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: '700' }}>
+                  Invite sent!
+                </h3>
+                <p style={{ margin: '0 0 20px', color: '#6b7280', fontSize: '14px' }}>
+                  <strong>{inviteeEmail}</strong> can now access this board.
+                  Share the link below so they can open it directly.
+                </p>
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+                  <input
+                    readOnly
+                    value={`${window.location.origin}/board/${inviteTarget}`}
+                    style={{
+                      flex: 1, padding: '10px 14px', border: '1px solid #d1d5db',
+                      borderRadius: '6px', fontSize: '13px', outline: 'none',
+                      background: '#f9fafb', color: '#374151',
+                    }}
+                  />
+                  <button
+                    onClick={() => copyBoardLink(inviteTarget)}
+                    style={{
+                      padding: '10px 16px',
+                      background: copiedBoardId === inviteTarget ? '#f0fdf4' : '#6366f1',
+                      color: copiedBoardId === inviteTarget ? '#16a34a' : 'white',
+                      border: copiedBoardId === inviteTarget ? '1px solid #86efac' : 'none',
+                      borderRadius: '6px', fontSize: '14px', fontWeight: '600',
+                      cursor: 'pointer', whiteSpace: 'nowrap',
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    {copiedBoardId === inviteTarget ? 'Copied!' : 'Copy link'}
+                  </button>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={closeInviteModal}
+                    style={{
+                      padding: '8px 20px', background: '#6366f1', color: 'white',
+                      border: 'none', borderRadius: '6px', fontSize: '14px',
+                      fontWeight: '600', cursor: 'pointer',
+                    }}
+                  >
+                    Done
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* ── Email form view ── */
+              <>
+                <h3 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: '700' }}>
+                  Invite guest
+                </h3>
+                <p style={{ margin: '0 0 20px', color: '#6b7280', fontSize: '14px' }}>
+                  Enter the email address of the person to invite. They will gain
+                  access to this board without being added to your organization.
+                </p>
+                <form onSubmit={handleInviteGuest} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <input
+                    type="email"
+                    value={inviteeEmail}
+                    onChange={(e) => setInviteeEmail(e.target.value)}
+                    placeholder="guest@example.com"
+                    style={{
+                      padding: '10px 14px', border: '1px solid #d1d5db',
+                      borderRadius: '6px', fontSize: '14px', outline: 'none',
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      onClick={closeInviteModal}
+                      style={{
+                        padding: '8px 16px', background: 'white', color: '#374151',
+                        border: '1px solid #d1d5db', borderRadius: '6px',
+                        fontSize: '14px', cursor: 'pointer',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={inviting || !inviteeEmail.trim()}
+                      style={{
+                        padding: '8px 16px', background: '#6366f1', color: 'white',
+                        border: 'none', borderRadius: '6px', fontSize: '14px',
+                        fontWeight: '600',
+                        cursor: inviting || !inviteeEmail.trim() ? 'not-allowed' : 'pointer',
+                        opacity: inviting || !inviteeEmail.trim() ? 0.6 : 1,
+                      }}
+                    >
+                      {inviting ? 'Inviting…' : 'Invite'}
+                    </button>
+                  </div>
+                </form>
+              </>
+            )}
+
           </div>
         </div>
       )}
