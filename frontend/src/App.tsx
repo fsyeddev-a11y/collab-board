@@ -3,6 +3,7 @@ import { Tldraw, InstancePresenceRecordType } from 'tldraw';
 import type { Editor, TLRecord, TLStoreEventInfo } from '@tldraw/editor';
 import { useUser, useAuth, SignIn, UserButton } from '@clerk/clerk-react';
 import { shouldSendCursor, CURSOR_THROTTLE_MS } from './utils/cursorThrottle';
+import { patchNoteCloneHandle } from './utils/noteArrowOverride';
 import 'tldraw/tldraw.css';
 
 // User color palette for presence
@@ -384,6 +385,9 @@ function App() {
 
     console.log('[Tldraw] Editor mounted');
     editorRef.current = editor;
+
+    // Override note clone-handle behaviour: create an arrow instead of a new note.
+    patchNoteCloneHandle(editor);
 
     // Set user preferences
     editor.user.updateUserPreferences({
