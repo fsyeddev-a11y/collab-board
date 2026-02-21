@@ -67,11 +67,19 @@ type ToolCall = CreateElementsCall | UpdateElementsCall | LayoutElementsCall | C
 const NOTE_W = 200;
 const NOTE_H = 200;
 const NOTE_GAP = 20;
-const NOTE_PADDING = 30;       // padding inside frame
-const FRAME_HEADER = 30;       // frame header height
-const FRAME_GAP = 40;          // gap between frames
-const MOVE_DISTANCE = 150;     // pixels for move instructions
+const NOTE_PADDING = 30;         // padding inside frame
+const FRAME_HEADER = 30;         // frame header height
+const FRAME_GAP = 40;            // gap between frames
+const FRAME_BOTTOM_PADDING = 20; // extra breathing room at frame bottom
+const MIN_FRAME_HEIGHT = 280;    // minimum frame height even with 0-1 items
+const MOVE_DISTANCE = 150;       // pixels for move instructions
 const SECTION_COLORS = ['yellow', 'green', 'blue', 'orange', 'red', 'violet'] as const;
+
+/** Calculate frame height to fully contain a vertical column of notes. */
+function calcFrameHeight(itemCount: number): number {
+  const contentH = itemCount * NOTE_H + Math.max(itemCount - 1, 0) * NOTE_GAP;
+  return Math.max(MIN_FRAME_HEIGHT, FRAME_HEADER + NOTE_PADDING + contentH + FRAME_BOTTOM_PADDING);
+}
 
 // ── Main resolver ─────────────────────────────────────────────────────────────
 
@@ -382,22 +390,28 @@ function layoutSwot(editor: Editor, call: CreateDiagramCall): void {
   const start = findStartPosition(editor);
   const sections = call.sections.slice(0, 4);
 
-  const maxItems = Math.max(...sections.map((s) => s.items.length), 1);
-  const cols = Math.ceil(Math.sqrt(maxItems));
-  const rows = Math.ceil(maxItems / cols);
-  const frameW = cols * (NOTE_W + NOTE_GAP) + NOTE_PADDING * 2 - NOTE_GAP;
-  const frameH = rows * (NOTE_H + NOTE_GAP) + NOTE_PADDING * 2 - NOTE_GAP + FRAME_HEADER;
+  const frameW = NOTE_W + NOTE_PADDING * 2;
+
+  // Row heights based on the tallest frame in each row
+  const topRowH = Math.max(
+    calcFrameHeight(sections[0]?.items.length ?? 0),
+    calcFrameHeight(sections[1]?.items.length ?? 0),
+  );
+  const bottomRowH = Math.max(
+    calcFrameHeight(sections[2]?.items.length ?? 0),
+    calcFrameHeight(sections[3]?.items.length ?? 0),
+  );
 
   const positions = [
-    { x: start.x, y: start.y },
-    { x: start.x + frameW + FRAME_GAP, y: start.y },
-    { x: start.x, y: start.y + frameH + FRAME_GAP },
-    { x: start.x + frameW + FRAME_GAP, y: start.y + frameH + FRAME_GAP },
+    { x: start.x, y: start.y, h: topRowH },
+    { x: start.x + frameW + FRAME_GAP, y: start.y, h: topRowH },
+    { x: start.x, y: start.y + topRowH + FRAME_GAP, h: bottomRowH },
+    { x: start.x + frameW + FRAME_GAP, y: start.y + topRowH + FRAME_GAP, h: bottomRowH },
   ];
 
   for (let i = 0; i < sections.length; i++) {
     const pos = positions[i] ?? positions[0];
-    createFrameWithNotes(editor, sections[i], pos, frameW, frameH, SECTION_COLORS[i % SECTION_COLORS.length]);
+    createFrameWithNotes(editor, sections[i], { x: pos.x, y: pos.y }, frameW, pos.h, SECTION_COLORS[i % SECTION_COLORS.length]);
   }
 }
 
@@ -405,13 +419,12 @@ function layoutSwot(editor: Editor, call: CreateDiagramCall): void {
 
 function layoutColumns(editor: Editor, call: CreateDiagramCall): void {
   const start = findStartPosition(editor);
+  const frameW = NOTE_W + NOTE_PADDING * 2;
   let curX = start.x;
 
   for (let i = 0; i < call.sections.length; i++) {
     const section = call.sections[i];
-    const itemCount = Math.max(section.items.length, 1);
-    const frameW = NOTE_W + NOTE_PADDING * 2;
-    const frameH = itemCount * (NOTE_H + NOTE_GAP) + NOTE_PADDING * 2 - NOTE_GAP + FRAME_HEADER;
+    const frameH = calcFrameHeight(section.items.length);
 
     createFrameWithNotes(editor, section, { x: curX, y: start.y }, frameW, frameH, SECTION_COLORS[i % SECTION_COLORS.length]);
     curX += frameW + FRAME_GAP;
@@ -422,14 +435,13 @@ function layoutColumns(editor: Editor, call: CreateDiagramCall): void {
 
 function layoutUserJourney(editor: Editor, call: CreateDiagramCall): void {
   const start = findStartPosition(editor);
+  const frameW = NOTE_W + NOTE_PADDING * 2;
   const frameIds: string[] = [];
   let curX = start.x;
 
   for (let i = 0; i < call.sections.length; i++) {
     const section = call.sections[i];
-    const itemCount = Math.max(section.items.length, 1);
-    const frameW = NOTE_W + NOTE_PADDING * 2;
-    const frameH = itemCount * (NOTE_H + NOTE_GAP) + NOTE_PADDING * 2 - NOTE_GAP + FRAME_HEADER;
+    const frameH = calcFrameHeight(section.items.length);
 
     const frameId = createFrameWithNotes(
       editor, section, { x: curX, y: start.y }, frameW, frameH,
