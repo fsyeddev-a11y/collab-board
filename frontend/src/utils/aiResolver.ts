@@ -112,35 +112,68 @@ export function resolveToolCalls(editor: Editor, toolCalls: ToolCall[]): void {
   }
 }
 
-// ── Post-batch frame resize ──────────────────────────────────────────────────
+// ── Frame fit-to-children helper ─────────────────────────────────────────────
+//
+// Moves the frame origin to align with the top-left-most child (plus padding),
+// then resizes to encompass all children. Children's local coordinates are
+// adjusted so they stay at the same page-space position.
+
+function fitFrameToChildren(editor: Editor, frameId: ReturnType<typeof createShapeId>): void {
+  const children = editor.getSortedChildIdsForParent(frameId);
+  if (children.length === 0) return;
+
+  const frameBounds = editor.getShapePageBounds(frameId);
+  const childBounds = children
+    .map((cid) => editor.getShapePageBounds(cid))
+    .filter(Boolean);
+
+  if (childBounds.length === 0 || !frameBounds) return;
+
+  // Content bounding box in page space
+  const contentMinX = Math.min(...childBounds.map((b) => b!.x));
+  const contentMinY = Math.min(...childBounds.map((b) => b!.y));
+  const contentMaxX = Math.max(...childBounds.map((b) => b!.maxX));
+  const contentMaxY = Math.max(...childBounds.map((b) => b!.maxY));
+
+  // New frame origin: pad around the top-left-most child
+  const newFrameX = contentMinX - NOTE_PADDING;
+  const newFrameY = contentMinY - FRAME_HEADER - NOTE_PADDING;
+
+  // How far the frame origin is moving in page space
+  const dx = newFrameX - frameBounds.x;
+  const dy = newFrameY - frameBounds.y;
+
+  // Shift each child's local position by -delta so it stays in the same page spot
+  if (dx !== 0 || dy !== 0) {
+    for (const cid of children) {
+      const child = editor.getShape(cid);
+      if (child) {
+        editor.updateShape({
+          id: cid,
+          type: child.type,
+          x: child.x - dx,
+          y: child.y - dy,
+        });
+      }
+    }
+  }
+
+  // Reposition and resize the frame
+  editor.updateShape({
+    id: frameId,
+    type: 'frame',
+    x: newFrameX,
+    y: newFrameY,
+    props: {
+      w: Math.max((contentMaxX - contentMinX) + NOTE_PADDING * 2, MIN_FRAME_HEIGHT),
+      h: Math.max((contentMaxY - contentMinY) + FRAME_HEADER + NOTE_PADDING + FRAME_BOTTOM_PADDING, MIN_FRAME_HEIGHT),
+    },
+  });
+}
 
 function fitFramesToChildren(editor: Editor, frameIds: string[]): void {
   for (const fid of frameIds) {
-    const frameId = fid as ReturnType<typeof createShapeId>;
-    const children = editor.getSortedChildIdsForParent(frameId);
-    if (children.length === 0) continue;
-
-    const frameBounds = editor.getShapePageBounds(frameId);
-    const childBounds = children
-      .map((cid) => editor.getShapePageBounds(cid))
-      .filter(Boolean);
-
-    if (childBounds.length > 0 && frameBounds) {
-      const contentMaxX = Math.max(...childBounds.map((b) => b!.maxX));
-      const contentMaxY = Math.max(...childBounds.map((b) => b!.maxY));
-
-      const neededW = (contentMaxX - frameBounds.x) + NOTE_PADDING;
-      const neededH = (contentMaxY - frameBounds.y) + FRAME_BOTTOM_PADDING;
-
-      editor.updateShape({
-        id: frameId,
-        type: 'frame',
-        props: {
-          w: Math.max(neededW, MIN_FRAME_HEIGHT),
-          h: Math.max(neededH, MIN_FRAME_HEIGHT),
-        },
-      });
-    }
+    fitFrameToChildren(editor, fid as ReturnType<typeof createShapeId>);
   }
 }
 
@@ -280,49 +313,27 @@ function resolveUpdateElements(editor: Editor, call: UpdateElementsCall): void {
     if (update.resizeInstruction) {
       const bounds = editor.getShapePageBounds(shapeId);
       if (bounds) {
-        let newW = bounds.w;
-        let newH = bounds.h;
-
-        switch (update.resizeInstruction) {
-          case 'double':
-            newW = bounds.w * 2;
-            newH = bounds.h * 2;
-            break;
-          case 'half':
-            newW = bounds.w * 0.5;
-            newH = bounds.h * 0.5;
-            break;
-          case 'fit-to-content': {
-            if (shape.type === 'frame') {
-              const children = editor.getSortedChildIdsForParent(shapeId);
-              if (children.length > 0) {
-                const frameBounds = editor.getShapePageBounds(shapeId);
-                // Use page bounds for accurate child dimensions (handles growY, auto-size, etc.)
-                const childBounds = children
-                  .map((cid) => editor.getShapePageBounds(cid))
-                  .filter(Boolean);
-                if (childBounds.length > 0 && frameBounds) {
-                  const contentMinX = Math.min(...childBounds.map((b) => b!.x));
-                  const contentMaxX = Math.max(...childBounds.map((b) => b!.maxX));
-                  const contentMinY = Math.min(...childBounds.map((b) => b!.y));
-                  const contentMaxY = Math.max(...childBounds.map((b) => b!.maxY));
-                  // Convert page-space content extent to local frame size
-                  const contentW = contentMaxX - contentMinX;
-                  const contentH = contentMaxY - contentMinY;
-                  newW = Math.max(contentW + NOTE_PADDING * 2, MIN_FRAME_HEIGHT);
-                  newH = Math.max(contentH + FRAME_HEADER + NOTE_PADDING + FRAME_BOTTOM_PADDING, MIN_FRAME_HEIGHT);
-                }
-              }
-            }
-            break;
+        if (update.resizeInstruction === 'fit-to-content' && shape.type === 'frame') {
+          fitFrameToChildren(editor, shapeId);
+        } else {
+          let newW = bounds.w;
+          let newH = bounds.h;
+          switch (update.resizeInstruction) {
+            case 'double':
+              newW = bounds.w * 2;
+              newH = bounds.h * 2;
+              break;
+            case 'half':
+              newW = bounds.w * 0.5;
+              newH = bounds.h * 0.5;
+              break;
           }
+          editor.updateShape({
+            id: shapeId,
+            type: shape.type,
+            props: { w: newW, h: newH },
+          });
         }
-
-        editor.updateShape({
-          id: shapeId,
-          type: shape.type,
-          props: { w: newW, h: newH },
-        });
       }
     }
 

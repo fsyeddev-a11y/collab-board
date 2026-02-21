@@ -6,7 +6,8 @@
       "Bash(npm install:*)",
       "Bash(npx vitest run:*)",
       "Bash(npm uninstall:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }
