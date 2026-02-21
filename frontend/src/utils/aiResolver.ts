@@ -4,13 +4,13 @@
  * Takes the array of intent-based tool calls from the AI agent and converts
  * them into real tldraw Editor API calls.  Handles:
  *
- *  - createFrame  → editor.createShape({ type: 'frame', ... })
- *  - createLayout → editor.createShape({ type: 'note', ... }) for each item
- *  - createConnector → editor.createShape({ type: 'arrow', ... }) + bindings
- *  - moveObject   → editor.nudgeShapes(...)
+ *  - createElements  → ad-hoc element creation (sticky, shape, text, connector)
+ *  - updateElements  → batch edits with semantic instructions
+ *  - layoutElements  → arrange existing shapes into layout patterns
+ *  - createDiagram   → structured framed layouts (SWOT, kanban, etc.)
  *
- * The agent returns ref IDs ("ref:frame_1") that this resolver maps to real
- * tldraw shape IDs as they are created.
+ * The LLM outputs only declarative intent (no coordinates).
+ * This resolver handles all canvas math and element placement.
  */
 
 import type { Editor } from '@tldraw/editor';
@@ -18,161 +18,87 @@ import { createShapeId } from 'tldraw';
 
 // ── Types matching the shared ToolCall schemas ────────────────────────────────
 
-interface LayoutItem {
-  text: string;
+interface CreateElementEntry {
+  type: 'sticky' | 'shape' | 'text' | 'connector';
   color?: string;
-}
-
-interface CreateFrameCall {
-  tool: 'createFrame';
-  ref: string;
-  label: string;
-  position?: string;
-  size?: string;
-}
-
-interface CreateLayoutCall {
-  tool: 'createLayout';
-  ref: string;
-  layoutType: string;
-  items: LayoutItem[];
-  frameLabel?: string;
-  frameRef?: string;
-  targetFrameRef?: string;
-}
-
-interface CreateConnectorCall {
-  tool: 'createConnector';
-  ref: string;
-  fromRef: string;
-  toRef: string;
-  label?: string;
-}
-
-interface MoveObjectCall {
-  tool: 'moveObject';
-  shapeId: string;
-  direction: string;
-  distance?: string;
-}
-
-interface CreateShapeCall {
-  tool: 'createShape';
-  ref: string;
-  geoType: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  color: string;
   text?: string;
 }
 
-interface ResizeObjectCall {
-  tool: 'resizeObject';
-  shapeId: string;
-  width: number;
-  height: number;
+interface CreateElementsCall {
+  tool: 'createElements';
+  elements: CreateElementEntry[];
 }
 
-interface UpdateTextCall {
-  tool: 'updateText';
+interface ElementUpdate {
   shapeId: string;
-  newText: string;
+  newText?: string;
+  newColor?: string;
+  resizeInstruction?: 'double' | 'half' | 'fit-to-content';
+  moveInstruction?: 'left' | 'right' | 'up' | 'down' | 'closer-together';
 }
 
-interface ChangeColorCall {
-  tool: 'changeColor';
-  shapeId: string;
-  color: string;
+interface UpdateElementsCall {
+  tool: 'updateElements';
+  updates: ElementUpdate[];
 }
 
-type ToolCall =
-  | CreateFrameCall
-  | CreateLayoutCall
-  | CreateConnectorCall
-  | MoveObjectCall
-  | CreateShapeCall
-  | ResizeObjectCall
-  | UpdateTextCall
-  | ChangeColorCall;
+interface LayoutElementsCall {
+  tool: 'layoutElements';
+  shapeIds: string[];
+  layoutType: 'grid' | 'horizontal-row' | 'vertical-column' | 'even-spacing';
+}
+
+interface DiagramSection {
+  sectionTitle: string;
+  items: string[];
+}
+
+interface CreateDiagramCall {
+  tool: 'createDiagram';
+  diagramType: string;
+  title: string;
+  sections: DiagramSection[];
+}
+
+type ToolCall = CreateElementsCall | UpdateElementsCall | LayoutElementsCall | CreateDiagramCall;
 
 // ── Layout geometry constants ─────────────────────────────────────────────────
-
-const FRAME_SIZES = {
-  small:  { w: 280, h: 350 },
-  medium: { w: 380, h: 450 },
-  large:  { w: 500, h: 600 },
-} as const;
-
-const FRAME_GAP = 40;
-
-// Position hints → starting X offset (frames laid out left-to-right)
-const POSITION_ORDER = ['left', 'center', 'right', 'far-right'] as const;
 
 const NOTE_W = 200;
 const NOTE_H = 200;
 const NOTE_GAP = 20;
-const NOTE_PADDING = 30; // padding inside frame
-
-const MOVE_DISTANCES = { small: 50, medium: 150, large: 300 } as const;
-
-// ── Ref → ShapeId map ─────────────────────────────────────────────────────────
-
-type RefMap = Map<string, string>; // "ref:frame_1" → "shape:abc123"
+const NOTE_PADDING = 30;       // padding inside frame
+const FRAME_HEADER = 30;       // frame header height
+const FRAME_GAP = 40;          // gap between frames
+const MOVE_DISTANCE = 150;     // pixels for move instructions
+const SECTION_COLORS = ['yellow', 'green', 'blue', 'orange', 'red', 'violet'] as const;
 
 // ── Main resolver ─────────────────────────────────────────────────────────────
 
 export function resolveToolCalls(editor: Editor, toolCalls: ToolCall[]): void {
-  const refMap: RefMap = new Map();
-
-  // Pre-scan: assign frame positions based on order of appearance and position hints.
-  const frameCalls = toolCalls.filter(
-    (c): c is CreateFrameCall => c.tool === 'createFrame',
-  );
-  const framePositions = computeFramePositions(editor, frameCalls);
-
   editor.batch(() => {
     for (const call of toolCalls) {
       switch (call.tool) {
-        case 'createFrame':
-          resolveCreateFrame(editor, call, refMap, framePositions);
+        case 'createElements':
+          resolveCreateElements(editor, call);
           break;
-        case 'createLayout':
-          resolveCreateLayout(editor, call, refMap);
+        case 'updateElements':
+          resolveUpdateElements(editor, call);
           break;
-        case 'createConnector':
-          resolveCreateConnector(editor, call, refMap);
+        case 'layoutElements':
+          resolveLayoutElements(editor, call);
           break;
-        case 'moveObject':
-          resolveMoveObject(editor, call);
-          break;
-        case 'createShape':
-          resolveCreateShape(editor, call, refMap);
-          break;
-        case 'resizeObject':
-          resolveResizeObject(editor, call, refMap);
-          break;
-        case 'updateText':
-          resolveUpdateText(editor, call, refMap);
-          break;
-        case 'changeColor':
-          resolveChangeColor(editor, call, refMap);
+        case 'createDiagram':
+          resolveCreateDiagram(editor, call);
           break;
       }
     }
   });
 }
 
-// ── Frame positioning ─────────────────────────────────────────────────────────
+// ── Find clear canvas area ───────────────────────────────────────────────────
 
-function computeFramePositions(
-  editor: Editor,
-  frameCalls: CreateFrameCall[],
-): Map<string, { x: number; y: number }> {
-  const positions = new Map<string, { x: number; y: number }>();
-
-  // Find a clear starting area (below/right of existing content).
+function findStartPosition(editor: Editor): { x: number; y: number } {
   const shapes = editor.getCurrentPageShapes();
   let startX = 100;
   let startY = 100;
@@ -187,231 +113,377 @@ function computeFramePositions(
     }
   }
 
-  // Sort frames by position hint, then by order of appearance.
-  const sorted = [...frameCalls].sort((a, b) => {
-    const ai = POSITION_ORDER.indexOf(
-      (a.position ?? 'auto') as (typeof POSITION_ORDER)[number],
-    );
-    const bi = POSITION_ORDER.indexOf(
-      (b.position ?? 'auto') as (typeof POSITION_ORDER)[number],
-    );
-    // 'auto' → -1 (indexOf miss), treat as insertion order
-    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-  });
-
-  let curX = startX;
-  for (const call of sorted) {
-    const dims = FRAME_SIZES[(call.size ?? 'medium') as keyof typeof FRAME_SIZES] ?? FRAME_SIZES.medium;
-    positions.set(call.ref, { x: curX, y: startY });
-    curX += dims.w + FRAME_GAP;
-  }
-
-  return positions;
+  return { x: startX, y: startY };
 }
 
-// ── Individual resolvers ──────────────────────────────────────────────────────
+// ── 1. createElements resolver ──────────────────────────────────────────────
 
-function resolveCreateFrame(
-  editor: Editor,
-  call: CreateFrameCall,
-  refMap: RefMap,
-  framePositions: Map<string, { x: number; y: number }>,
-): void {
-  const id = createShapeId();
-  const pos = framePositions.get(call.ref) ?? { x: 100, y: 100 };
-  const dims = FRAME_SIZES[(call.size ?? 'medium') as keyof typeof FRAME_SIZES] ?? FRAME_SIZES.medium;
+function resolveCreateElements(editor: Editor, call: CreateElementsCall): void {
+  const start = findStartPosition(editor);
 
-  editor.createShape({
-    id,
-    type: 'frame',
-    x: pos.x,
-    y: pos.y,
-    props: { w: dims.w, h: dims.h, name: call.label },
-  });
+  // Place elements in a horizontal row
+  for (let i = 0; i < call.elements.length; i++) {
+    const el = call.elements[i];
+    const x = start.x + i * (NOTE_W + NOTE_GAP);
+    const y = start.y;
+    const id = createShapeId();
 
-  refMap.set(call.ref, id);
+    switch (el.type) {
+      case 'sticky':
+        editor.createShape({
+          id,
+          type: 'note',
+          x,
+          y,
+          props: {
+            text: el.text ?? '',
+            color: el.color ?? 'yellow',
+          },
+        });
+        break;
+
+      case 'shape':
+        editor.createShape({
+          id,
+          type: 'geo',
+          x,
+          y,
+          props: {
+            geo: 'rectangle',
+            w: NOTE_W,
+            h: NOTE_H,
+            color: el.color ?? 'blue',
+            text: el.text ?? '',
+          },
+        });
+        break;
+
+      case 'text':
+        editor.createShape({
+          id,
+          type: 'text',
+          x,
+          y,
+          props: {
+            text: el.text ?? '',
+            color: el.color ?? 'black',
+          },
+        } as Parameters<typeof editor.createShape>[0]);
+        break;
+
+      case 'connector':
+        // Connectors without targets get placed as standalone arrows
+        editor.createShape({
+          id,
+          type: 'arrow',
+          x,
+          y,
+          props: {
+            start: { x: 0, y: 0 },
+            end: { x: 200, y: 0 },
+            text: el.text ?? '',
+          },
+        });
+        break;
+    }
+  }
 }
 
-function resolveCreateLayout(
-  editor: Editor,
-  call: CreateLayoutCall,
-  refMap: RefMap,
-): void {
-  // If targeting a frame ref, look up the real shape ID.
-  const parentRef = call.targetFrameRef ?? call.frameRef;
-  const parentId = parentRef ? refMap.get(parentRef) : undefined;
+// ── 2. updateElements resolver ──────────────────────────────────────────────
 
-  // If frameLabel is set and no parent exists, create a wrapper frame.
-  let frameId = parentId;
-  if (!frameId && call.frameLabel) {
-    const fid = createShapeId();
-    const shapes = editor.getCurrentPageShapes();
-    let startX = 100;
-    let startY = 100;
-    if (shapes.length > 0) {
-      const allBounds = shapes.map((s) => editor.getShapePageBounds(s.id)).filter(Boolean);
-      if (allBounds.length > 0) {
-        startY = Math.max(...allBounds.map((b) => b!.maxY)) + 80;
+function resolveUpdateElements(editor: Editor, call: UpdateElementsCall): void {
+  for (const update of call.updates) {
+    const shapeId = update.shapeId as ReturnType<typeof createShapeId>;
+    const shape = editor.getShape(shapeId);
+
+    if (!shape) {
+      console.warn('[aiResolver] Skipping update — shape not found:', update.shapeId);
+      continue;
+    }
+
+    // Apply text/color changes
+    const props: Record<string, unknown> = {};
+    if (update.newText !== undefined) props.text = update.newText;
+    if (update.newColor !== undefined) props.color = update.newColor;
+
+    if (Object.keys(props).length > 0) {
+      editor.updateShape({ id: shapeId, type: shape.type, props });
+    }
+
+    // Apply resize instruction
+    if (update.resizeInstruction) {
+      const bounds = editor.getShapePageBounds(shapeId);
+      if (bounds) {
+        let newW = bounds.w;
+        let newH = bounds.h;
+
+        switch (update.resizeInstruction) {
+          case 'double':
+            newW = bounds.w * 2;
+            newH = bounds.h * 2;
+            break;
+          case 'half':
+            newW = bounds.w * 0.5;
+            newH = bounds.h * 0.5;
+            break;
+          case 'fit-to-content':
+            // No-op for now — tldraw auto-fits text shapes
+            break;
+        }
+
+        if (update.resizeInstruction !== 'fit-to-content') {
+          editor.updateShape({
+            id: shapeId,
+            type: shape.type,
+            props: { w: newW, h: newH },
+          });
+        }
       }
     }
-    const cols = Math.ceil(Math.sqrt(call.items.length));
-    const rows = Math.ceil(call.items.length / cols);
-    const fw = cols * (NOTE_W + NOTE_GAP) + NOTE_PADDING * 2 - NOTE_GAP;
-    const fh = rows * (NOTE_H + NOTE_GAP) + NOTE_PADDING * 2 - NOTE_GAP + 30; // +30 for frame header
 
-    editor.createShape({
-      id: fid,
-      type: 'frame',
-      x: startX,
-      y: startY,
-      props: { w: fw, h: fh, name: call.frameLabel },
-    });
-    frameId = fid;
-    if (call.frameRef) refMap.set(call.frameRef, fid);
-  }
-
-  // Compute note positions based on layout type.
-  const notePositions = computeNotePositions(call.layoutType, call.items.length, frameId, editor, refMap);
-
-  for (let i = 0; i < call.items.length; i++) {
-    const item = call.items[i];
-    const pos = notePositions[i];
-    const noteId = createShapeId();
-
-    const shapeData: Record<string, unknown> = {
-      id: noteId,
-      type: 'note',
-      x: pos.x,
-      y: pos.y,
-      props: {
-        text: item.text,
-        color: item.color ?? 'yellow',
-      },
-    };
-
-    // If inside a frame, set parentId so tldraw nests the note.
-    if (frameId) {
-      shapeData.parentId = frameId;
+    // Apply move instruction
+    if (update.moveInstruction && update.moveInstruction !== 'closer-together') {
+      const delta = { x: 0, y: 0 };
+      switch (update.moveInstruction) {
+        case 'left':  delta.x = -MOVE_DISTANCE; break;
+        case 'right': delta.x = MOVE_DISTANCE;  break;
+        case 'up':    delta.y = -MOVE_DISTANCE; break;
+        case 'down':  delta.y = MOVE_DISTANCE;  break;
+      }
+      editor.nudgeShapes([shapeId], delta);
     }
-
-    editor.createShape(shapeData as Parameters<typeof editor.createShape>[0]);
   }
 
-  refMap.set(call.ref, call.items.length > 0 ? 'layout-group' : '');
+  // Handle 'closer-together' — move all affected shapes toward their centroid
+  const closerShapes = call.updates
+    .filter((u) => u.moveInstruction === 'closer-together')
+    .map((u) => u.shapeId as ReturnType<typeof createShapeId>)
+    .filter((id) => editor.getShape(id));
+
+  if (closerShapes.length >= 2) {
+    const bounds = closerShapes
+      .map((id) => ({ id, b: editor.getShapePageBounds(id)! }))
+      .filter((entry) => entry.b);
+
+    const cx = bounds.reduce((sum, e) => sum + e.b.midX, 0) / bounds.length;
+    const cy = bounds.reduce((sum, e) => sum + e.b.midY, 0) / bounds.length;
+
+    for (const entry of bounds) {
+      const dx = (cx - entry.b.midX) * 0.4; // move 40% closer to centroid
+      const dy = (cy - entry.b.midY) * 0.4;
+      editor.nudgeShapes([entry.id], { x: dx, y: dy });
+    }
+  }
 }
 
-function computeNotePositions(
-  layoutType: string,
-  count: number,
-  frameId: string | undefined,
-  editor: Editor,
-  _refMap: RefMap,
-): Array<{ x: number; y: number }> {
-  const positions: Array<{ x: number; y: number }> = [];
+// ── 3. layoutElements resolver ──────────────────────────────────────────────
 
-  // If inside a frame, positions are LOCAL (relative to frame origin).
-  // Start with padding offset. +30 y for frame header.
-  const offsetX = frameId ? NOTE_PADDING : 0;
-  const offsetY = frameId ? NOTE_PADDING + 30 : 0;
+function resolveLayoutElements(editor: Editor, call: LayoutElementsCall): void {
+  const validIds = call.shapeIds
+    .map((id) => id as ReturnType<typeof createShapeId>)
+    .filter((id) => editor.getShape(id));
 
-  // If not inside a frame, find a clear area on the canvas.
-  let baseX = offsetX;
-  let baseY = offsetY;
-
-  if (!frameId) {
-    const shapes = editor.getCurrentPageShapes();
-    baseX = 100;
-    baseY = 100;
-    if (shapes.length > 0) {
-      const allBounds = shapes.map((s) => editor.getShapePageBounds(s.id)).filter(Boolean);
-      if (allBounds.length > 0) {
-        baseY = Math.max(...allBounds.map((b) => b!.maxY)) + 80;
-      }
-    }
-  }
-
-  switch (layoutType) {
-    case 'grid': {
-      const cols = Math.ceil(Math.sqrt(count));
-      for (let i = 0; i < count; i++) {
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        positions.push({
-          x: baseX + col * (NOTE_W + NOTE_GAP),
-          y: baseY + row * (NOTE_H + NOTE_GAP),
-        });
-      }
-      break;
-    }
-    case 'list':
-    case 'columns': {
-      // Simple vertical list
-      for (let i = 0; i < count; i++) {
-        positions.push({
-          x: baseX,
-          y: baseY + i * (NOTE_H + NOTE_GAP),
-        });
-      }
-      break;
-    }
-    case 'timeline': {
-      // Horizontal row
-      for (let i = 0; i < count; i++) {
-        positions.push({
-          x: baseX + i * (NOTE_W + NOTE_GAP),
-          y: baseY,
-        });
-      }
-      break;
-    }
-    case 'mindmap': {
-      // First item is center, rest fan out around it
-      if (count === 0) break;
-      const centerX = baseX + 200;
-      const centerY = baseY + 200;
-      positions.push({ x: centerX, y: centerY });
-
-      const radius = 280;
-      for (let i = 1; i < count; i++) {
-        const angle = ((i - 1) / (count - 1)) * Math.PI * 2 - Math.PI / 2;
-        positions.push({
-          x: centerX + Math.cos(angle) * radius,
-          y: centerY + Math.sin(angle) * radius,
-        });
-      }
-      break;
-    }
-    default: {
-      // Fallback: grid
-      const cols = Math.ceil(Math.sqrt(count));
-      for (let i = 0; i < count; i++) {
-        positions.push({
-          x: baseX + (i % cols) * (NOTE_W + NOTE_GAP),
-          y: baseY + Math.floor(i / cols) * (NOTE_H + NOTE_GAP),
-        });
-      }
-    }
-  }
-
-  return positions;
-}
-
-function resolveCreateConnector(
-  editor: Editor,
-  call: CreateConnectorCall,
-  refMap: RefMap,
-): void {
-  // Resolve refs to real shape IDs.
-  const fromId = refMap.get(call.fromRef) ?? call.fromRef;
-  const toId = refMap.get(call.toRef) ?? call.toRef;
-
-  // Only create if both targets exist on the canvas.
-  if (!editor.getShape(fromId as Parameters<typeof editor.getShape>[0]) ||
-      !editor.getShape(toId as Parameters<typeof editor.getShape>[0])) {
-    console.warn('[aiResolver] Skipping connector — target not found:', call);
+  if (validIds.length < 2) {
+    console.warn('[aiResolver] layoutElements needs at least 2 valid shapes');
     return;
   }
 
+  // Get current bounds to find a starting position
+  const firstBounds = editor.getShapePageBounds(validIds[0]);
+  const startX = firstBounds?.x ?? 100;
+  const startY = firstBounds?.y ?? 100;
+
+  // Get average dimensions for spacing
+  const allBounds = validIds
+    .map((id) => editor.getShapePageBounds(id))
+    .filter(Boolean);
+  const avgW = allBounds.reduce((sum, b) => sum + b!.w, 0) / allBounds.length;
+  const avgH = allBounds.reduce((sum, b) => sum + b!.h, 0) / allBounds.length;
+
+  switch (call.layoutType) {
+    case 'horizontal-row': {
+      let curX = startX;
+      for (const id of validIds) {
+        const shape = editor.getShape(id)!;
+        editor.updateShape({ id, type: shape.type, x: curX, y: startY });
+        curX += avgW + NOTE_GAP;
+      }
+      break;
+    }
+
+    case 'vertical-column': {
+      let curY = startY;
+      for (const id of validIds) {
+        const shape = editor.getShape(id)!;
+        editor.updateShape({ id, type: shape.type, x: startX, y: curY });
+        curY += avgH + NOTE_GAP;
+      }
+      break;
+    }
+
+    case 'grid': {
+      const cols = Math.ceil(Math.sqrt(validIds.length));
+      for (let i = 0; i < validIds.length; i++) {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const shape = editor.getShape(validIds[i])!;
+        editor.updateShape({
+          id: validIds[i],
+          type: shape.type,
+          x: startX + col * (avgW + NOTE_GAP),
+          y: startY + row * (avgH + NOTE_GAP),
+        });
+      }
+      break;
+    }
+
+    case 'even-spacing': {
+      // Spread evenly in a horizontal row with generous spacing
+      const totalWidth = validIds.length * avgW;
+      const spacing = (totalWidth + validIds.length * NOTE_GAP * 3) / (validIds.length - 1);
+      for (let i = 0; i < validIds.length; i++) {
+        const shape = editor.getShape(validIds[i])!;
+        editor.updateShape({
+          id: validIds[i],
+          type: shape.type,
+          x: startX + i * spacing,
+          y: startY,
+        });
+      }
+      break;
+    }
+  }
+}
+
+// ── 4. createDiagram resolver ───────────────────────────────────────────────
+
+function resolveCreateDiagram(editor: Editor, call: CreateDiagramCall): void {
+  switch (call.diagramType) {
+    case 'swot':
+      layoutSwot(editor, call);
+      break;
+    case 'kanban':
+    case 'retrospective':
+    case 'custom_frame':
+      layoutColumns(editor, call);
+      break;
+    case 'user_journey':
+      layoutUserJourney(editor, call);
+      break;
+    default:
+      layoutColumns(editor, call);
+      break;
+  }
+}
+
+// ── SWOT: 2x2 grid of frames ────────────────────────────────────────────────
+
+function layoutSwot(editor: Editor, call: CreateDiagramCall): void {
+  const start = findStartPosition(editor);
+  const sections = call.sections.slice(0, 4);
+
+  const maxItems = Math.max(...sections.map((s) => s.items.length), 1);
+  const cols = Math.ceil(Math.sqrt(maxItems));
+  const rows = Math.ceil(maxItems / cols);
+  const frameW = cols * (NOTE_W + NOTE_GAP) + NOTE_PADDING * 2 - NOTE_GAP;
+  const frameH = rows * (NOTE_H + NOTE_GAP) + NOTE_PADDING * 2 - NOTE_GAP + FRAME_HEADER;
+
+  const positions = [
+    { x: start.x, y: start.y },
+    { x: start.x + frameW + FRAME_GAP, y: start.y },
+    { x: start.x, y: start.y + frameH + FRAME_GAP },
+    { x: start.x + frameW + FRAME_GAP, y: start.y + frameH + FRAME_GAP },
+  ];
+
+  for (let i = 0; i < sections.length; i++) {
+    const pos = positions[i] ?? positions[0];
+    createFrameWithNotes(editor, sections[i], pos, frameW, frameH, SECTION_COLORS[i % SECTION_COLORS.length]);
+  }
+}
+
+// ── Columns: kanban, retrospective, custom_frame ─────────────────────────────
+
+function layoutColumns(editor: Editor, call: CreateDiagramCall): void {
+  const start = findStartPosition(editor);
+  let curX = start.x;
+
+  for (let i = 0; i < call.sections.length; i++) {
+    const section = call.sections[i];
+    const itemCount = Math.max(section.items.length, 1);
+    const frameW = NOTE_W + NOTE_PADDING * 2;
+    const frameH = itemCount * (NOTE_H + NOTE_GAP) + NOTE_PADDING * 2 - NOTE_GAP + FRAME_HEADER;
+
+    createFrameWithNotes(editor, section, { x: curX, y: start.y }, frameW, frameH, SECTION_COLORS[i % SECTION_COLORS.length]);
+    curX += frameW + FRAME_GAP;
+  }
+}
+
+// ── User Journey: horizontal flow with arrows ────────────────────────────────
+
+function layoutUserJourney(editor: Editor, call: CreateDiagramCall): void {
+  const start = findStartPosition(editor);
+  const frameIds: string[] = [];
+  let curX = start.x;
+
+  for (let i = 0; i < call.sections.length; i++) {
+    const section = call.sections[i];
+    const itemCount = Math.max(section.items.length, 1);
+    const frameW = NOTE_W + NOTE_PADDING * 2;
+    const frameH = itemCount * (NOTE_H + NOTE_GAP) + NOTE_PADDING * 2 - NOTE_GAP + FRAME_HEADER;
+
+    const frameId = createFrameWithNotes(
+      editor, section, { x: curX, y: start.y }, frameW, frameH,
+      SECTION_COLORS[i % SECTION_COLORS.length],
+    );
+    frameIds.push(frameId);
+    curX += frameW + FRAME_GAP + 20; // extra gap for arrows
+  }
+
+  // Connect stages with arrows
+  for (let i = 0; i < frameIds.length - 1; i++) {
+    createArrowBetween(editor, frameIds[i], frameIds[i + 1]);
+  }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function createFrameWithNotes(
+  editor: Editor,
+  section: DiagramSection,
+  pos: { x: number; y: number },
+  frameW: number,
+  frameH: number,
+  noteColor: string,
+): string {
+  const frameId = createShapeId();
+
+  editor.createShape({
+    id: frameId,
+    type: 'frame',
+    x: pos.x,
+    y: pos.y,
+    props: { w: frameW, h: frameH, name: section.sectionTitle },
+  });
+
+  for (let i = 0; i < section.items.length; i++) {
+    const noteId = createShapeId();
+    editor.createShape({
+      id: noteId,
+      type: 'note',
+      x: NOTE_PADDING,
+      y: NOTE_PADDING + FRAME_HEADER + i * (NOTE_H + NOTE_GAP),
+      parentId: frameId,
+      props: {
+        text: section.items[i],
+        color: noteColor,
+      },
+    } as Parameters<typeof editor.createShape>[0]);
+  }
+
+  return frameId;
+}
+
+function createArrowBetween(editor: Editor, fromId: string, toId: string): void {
   const arrowId = createShapeId();
 
   editor.createShape({
@@ -422,11 +494,10 @@ function resolveCreateConnector(
     props: {
       start: { x: 0, y: 0 },
       end: { x: 100, y: 0 },
-      text: call.label ?? '',
+      text: '',
     },
   });
 
-  // Bind arrow terminals to the target shapes.
   editor.createBinding({
     type: 'arrow',
     fromId: arrowId,
@@ -449,105 +520,5 @@ function resolveCreateConnector(
       isExact: false,
       isPrecise: false,
     },
-  });
-
-  refMap.set(call.ref, arrowId);
-}
-
-function resolveMoveObject(editor: Editor, call: MoveObjectCall): void {
-  const dist = MOVE_DISTANCES[(call.distance ?? 'medium') as keyof typeof MOVE_DISTANCES] ?? 150;
-
-  const delta = { x: 0, y: 0 };
-  switch (call.direction) {
-    case 'left':  delta.x = -dist; break;
-    case 'right': delta.x = dist;  break;
-    case 'up':    delta.y = -dist; break;
-    case 'down':  delta.y = dist;  break;
-  }
-
-  const shapeId = call.shapeId as ReturnType<typeof createShapeId>;
-  if (!editor.getShape(shapeId)) {
-    console.warn('[aiResolver] Skipping move — shape not found:', call.shapeId);
-    return;
-  }
-
-  editor.nudgeShapes([shapeId], delta);
-}
-
-function resolveCreateShape(
-  editor: Editor,
-  call: CreateShapeCall,
-  refMap: RefMap,
-): void {
-  const id = createShapeId();
-
-  editor.createShape({
-    id,
-    type: 'geo',
-    x: call.x,
-    y: call.y,
-    props: {
-      geo: call.geoType,
-      w: call.width,
-      h: call.height,
-      color: call.color,
-      text: call.text ?? '',
-    },
-  });
-
-  refMap.set(call.ref, id);
-}
-
-function resolveResizeObject(
-  editor: Editor,
-  call: ResizeObjectCall,
-  refMap: RefMap,
-): void {
-  const shapeId = (refMap.get(call.shapeId) ?? call.shapeId) as ReturnType<typeof createShapeId>;
-  if (!editor.getShape(shapeId)) {
-    console.warn('[aiResolver] Skipping resize — shape not found:', call.shapeId);
-    return;
-  }
-
-  editor.updateShape({
-    id: shapeId,
-    type: editor.getShape(shapeId)!.type,
-    props: { w: call.width, h: call.height },
-  });
-}
-
-function resolveUpdateText(
-  editor: Editor,
-  call: UpdateTextCall,
-  refMap: RefMap,
-): void {
-  const shapeId = (refMap.get(call.shapeId) ?? call.shapeId) as ReturnType<typeof createShapeId>;
-  if (!editor.getShape(shapeId)) {
-    console.warn('[aiResolver] Skipping text update — shape not found:', call.shapeId);
-    return;
-  }
-
-  editor.updateShape({
-    id: shapeId,
-    type: editor.getShape(shapeId)!.type,
-    props: { text: call.newText },
-  });
-}
-
-function resolveChangeColor(
-  editor: Editor,
-  call: ChangeColorCall,
-  refMap: RefMap,
-): void {
-  const shapeId = (refMap.get(call.shapeId) ?? call.shapeId) as ReturnType<typeof createShapeId>;
-  if (!editor.getShape(shapeId)) {
-    console.warn('[aiResolver] Skipping color change — shape not found:', call.shapeId);
-    return;
-  }
-
-  editor.updateShape({
-    id: shapeId,
-    type: editor.getShape(shapeId)!.type,
-    props: { color: call.color },
   });
 }

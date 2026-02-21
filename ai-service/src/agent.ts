@@ -36,18 +36,6 @@ function getLLM(): ChatOpenAI {
   return _llm;
 }
 
-// ── Ref-ID counter ────────────────────────────────────────────────────────────
-//
-// Each /generate request gets its own counter so the agent can create shapes in
-// step 1 (e.g. ref:frame_1) and reference them in step 2 (e.g. nest notes
-// inside ref:frame_1).  The frontend resolves ref IDs to real tldraw shape IDs
-// when it applies the tool calls to the canvas.
-
-function makeRefCounter() {
-  let n = 0;
-  return (prefix: string) => `ref:${prefix}_${++n}`;
-}
-
 // ── Tool colour palette (matches tldraw) ──────────────────────────────────────
 
 const TL_COLORS = [
@@ -67,324 +55,186 @@ const TL_COLORS = [
 
 const TLColorEnum = z.enum(TL_COLORS);
 
-// ── Macro Tools ───────────────────────────────────────────────────────────────
+// ── Compound Tools ────────────────────────────────────────────────────────────
 //
-// Every tool returns a JSON string.  The string becomes the "observation" that
-// the AgentExecutor feeds back to the LLM, letting it reason about what it
-// planned so far and chain subsequent calls.
-//
-// Tools output INTENT — the frontend resolves layout geometry.
+// 4 tools:
+//   1. createElements   — ad-hoc element creation (no coordinates)
+//   2. updateElements   — batch edits with semantic instructions
+//   3. layoutElements   — arrange existing shapes by layout type
+//   4. createDiagram    — complex framed templates
 
-function buildTools(nextRef: (prefix: string) => string) {
-  const createLayout = new DynamicStructuredTool({
-    name: 'createLayout',
+function buildTools() {
+  const createElements = new DynamicStructuredTool({
+    name: 'createElements',
     description:
-      'Create a structured layout of sticky notes. Use this for brainstorming, ' +
-      'organising ideas, listing items, or populating a column/section. ' +
-      'If targetFrameRef is provided, the notes are placed inside that frame.',
+      'Create one or more elements on the board. The system will automatically ' +
+      'calculate placement. Use this for ad-hoc creation of sticky notes, shapes, ' +
+      'text labels, or connectors without needing to specify coordinates.',
     schema: z.object({
-      layoutType: z
-        .enum(['grid', 'columns', 'mindmap', 'timeline', 'list'])
-        .describe(
-          'grid: equal rows/cols; columns: vertical stacks grouped by heading; ' +
-          'mindmap: central node with branches; timeline: left-to-right; ' +
-          'list: simple vertical list',
-        ),
-      items: z
+      elements: z
         .array(
           z.object({
-            text: z.string().describe('Content of the sticky note'),
-            color: TLColorEnum.nullable().optional().describe('tldraw colour, or null for default'),
+            type: z
+              .enum(['sticky', 'shape', 'text', 'connector'])
+              .describe(
+                'sticky: a sticky note; shape: a geometric shape (rectangle); ' +
+                'text: a text label; connector: an arrow/line',
+              ),
+            color: TLColorEnum.optional().describe('tldraw colour, or omit for default'),
+            text: z.string().optional().describe('Text content for the element'),
           }),
         )
         .min(1)
         .max(30),
-      frameLabel: z
-        .string()
-        .nullable()
-        .optional()
+    }),
+    func: async (input) => {
+      const result = { tool: 'createElements' as const, ...input };
+      return JSON.stringify({
+        _observation: `Planned ${input.elements.length} element(s): ${input.elements.map((e) => e.type).join(', ')}. The frontend will handle placement.`,
+        ...result,
+      });
+    },
+  });
+
+  const updateElements = new DynamicStructuredTool({
+    name: 'updateElements',
+    description:
+      'Batch-edit existing shapes on the board. Find shape IDs from the ' +
+      'CURRENT BOARD STATE in the system prompt. Each update targets a shape ' +
+      'by its exact ID and can change text, color, size, or position using ' +
+      'semantic instructions (no pixel values needed).',
+    schema: z.object({
+      updates: z
+        .array(
+          z.object({
+            shapeId: z.string().describe('The exact tldraw shape ID from the board state'),
+            newText: z.string().optional().describe('New text content for the shape'),
+            newColor: TLColorEnum.optional().describe('New tldraw colour'),
+            resizeInstruction: z
+              .enum(['double', 'half', 'fit-to-content'])
+              .optional()
+              .describe('How to resize: double the size, halve it, or fit to content'),
+            moveInstruction: z
+              .enum(['left', 'right', 'up', 'down', 'closer-together'])
+              .optional()
+              .describe('Direction to move the shape'),
+          }),
+        )
+        .min(1),
+    }),
+    func: async (input) => {
+      const result = { tool: 'updateElements' as const, ...input };
+      return JSON.stringify({
+        _observation: `Planned ${input.updates.length} element update(s): ${input.updates.map((u) => u.shapeId).join(', ')}.`,
+        ...result,
+      });
+    },
+  });
+
+  const layoutElements = new DynamicStructuredTool({
+    name: 'layoutElements',
+    description:
+      'Arrange existing shapes into a layout pattern. Find shape IDs from the ' +
+      'CURRENT BOARD STATE. The system will reposition the shapes into the ' +
+      'requested layout automatically.',
+    schema: z.object({
+      shapeIds: z
+        .array(z.string())
+        .min(2)
+        .describe('The exact tldraw shape IDs to arrange'),
+      layoutType: z
+        .enum(['grid', 'horizontal-row', 'vertical-column', 'even-spacing'])
         .describe(
-          'If set AND targetFrameRef is NOT set, wrap the layout in a new labelled frame. ' +
-          'Ignored when targetFrameRef is provided (the frame already exists). Null if not needed.',
+          'grid: arrange in rows/cols; horizontal-row: single row left-to-right; ' +
+          'vertical-column: single column top-to-bottom; even-spacing: spread evenly',
         ),
-      targetFrameRef: z
-        .string()
-        .nullable()
-        .optional()
+    }),
+    func: async (input) => {
+      const result = { tool: 'layoutElements' as const, ...input };
+      return JSON.stringify({
+        _observation: `Planned ${input.layoutType} layout for ${input.shapeIds.length} shapes.`,
+        ...result,
+      });
+    },
+  });
+
+  const createDiagram = new DynamicStructuredTool({
+    name: 'createDiagram',
+    description:
+      'Create a structured diagram with frames and sticky notes. The system ' +
+      'will automatically calculate all coordinates, frame sizes, and element ' +
+      'placement. You only need to provide the content structure. Use this for ' +
+      'SWOT analyses, kanban boards, user journeys, retrospectives, or any ' +
+      'custom framed layout.',
+    schema: z.object({
+      diagramType: z
+        .enum(['swot', 'kanban', 'user_journey', 'retrospective', 'custom_frame'])
         .describe(
-          'A ref ID from a previous createFrame call (e.g. "ref:frame_1"). ' +
-          'The notes will be nested inside this frame. Null if not targeting a frame.',
+          'swot: 2x2 grid (Strengths, Weaknesses, Opportunities, Threats); ' +
+          'kanban: horizontal columns (e.g. To Do, In Progress, Done); ' +
+          'user_journey: horizontal flow of stages with touchpoints; ' +
+          'retrospective: columns for What Went Well, What Didn\'t, Action Items; ' +
+          'custom_frame: flexible columns for any other framed layout',
         ),
+      title: z.string().describe('The title of the overall diagram'),
+      sections: z
+        .array(
+          z.object({
+            sectionTitle: z.string().describe('Header for this section/column'),
+            items: z
+              .array(z.string())
+              .describe('Sticky note contents for this section'),
+          }),
+        )
+        .min(1)
+        .max(10),
     }),
     func: async (input) => {
-      const layoutRef = nextRef('layout');
-      const frameRef =
-        input.targetFrameRef ?? (input.frameLabel ? nextRef('frame') : undefined);
-
-      const result = {
-        tool: 'createLayout' as const,
-        ref: layoutRef,
-        frameRef,
-        ...input,
-      };
-
-      // Observation the agent sees — lets it know what ref IDs were assigned.
-      const noteCount = input.items.length;
-      const frameNote = frameRef
-        ? ` inside frame ${frameRef} ("${input.targetFrameRef ? 'existing' : input.frameLabel}")`
-        : '';
+      const result = { tool: 'createDiagram' as const, ...input };
+      const totalItems = input.sections.reduce((sum, s) => sum + s.items.length, 0);
       return JSON.stringify({
-        _observation: `Planned ${input.layoutType} layout ${layoutRef} with ${noteCount} notes${frameNote}.`,
+        _observation: `Planned ${input.diagramType} diagram "${input.title}" with ${input.sections.length} sections and ${totalItems} items. The frontend will handle all layout geometry.`,
         ...result,
       });
     },
   });
 
-  const createFrame = new DynamicStructuredTool({
-    name: 'createFrame',
-    description:
-      'Create a labelled frame (container/section) on the board. Returns a ref ' +
-      'ID you can pass as targetFrameRef to createLayout to add notes inside it. ' +
-      'Use this to set up columns, sections, or groups BEFORE populating them.',
-    schema: z.object({
-      label: z.string().describe('Display name shown on the frame header'),
-      position: z
-        .enum(['auto', 'left', 'center', 'right', 'far-right'])
-        .describe(
-          'Hint for horizontal placement. "auto" lets the frontend decide. ' +
-          'Use left/center/right/far-right when creating multiple side-by-side frames.',
-        ),
-      size: z
-        .enum(['small', 'medium', 'large'])
-        .describe('Hint for frame dimensions'),
-    }),
-    func: async (input) => {
-      const ref = nextRef('frame');
-      const result = { tool: 'createFrame' as const, ref, ...input };
-      return JSON.stringify({
-        _observation: `Planned frame ${ref} ("${input.label}") at position=${input.position}, size=${input.size}. Use targetFrameRef="${ref}" in createLayout to add notes inside it.`,
-        ...result,
-      });
-    },
-  });
-
-  const createConnector = new DynamicStructuredTool({
-    name: 'createConnector',
-    description:
-      'Draw an arrow between two shapes or ref IDs. Use to show ' +
-      'relationships, flows, or dependencies.',
-    schema: z.object({
-      fromRef: z
-        .string()
-        .describe('Source shape ID or ref ID (e.g. "ref:frame_1" or "shape:abc")'),
-      toRef: z
-        .string()
-        .describe('Target shape ID or ref ID'),
-      label: z.string().nullable().optional().describe('Optional text label on the arrow, or null'),
-    }),
-    func: async (input) => {
-      const ref = nextRef('arrow');
-      const result = { tool: 'createConnector' as const, ref, ...input };
-      return JSON.stringify({
-        _observation: `Planned connector ${ref}: ${input.fromRef} → ${input.toRef}${input.label ? ` ("${input.label}")` : ''}.`,
-        ...result,
-      });
-    },
-  });
-
-  const moveObject = new DynamicStructuredTool({
-    name: 'moveObject',
-    description:
-      'Reposition an existing shape on the board. Uses semantic ' +
-      'directions instead of pixel coordinates.',
-    schema: z.object({
-      shapeId: z
-        .string()
-        .describe('The tldraw shape ID to move (from the board state)'),
-      direction: z
-        .enum(['left', 'right', 'up', 'down'])
-        .describe('Direction to move'),
-      distance: z
-        .enum(['small', 'medium', 'large'])
-        .describe('How far to move (small ≈ 50px, medium ≈ 150px, large ≈ 300px)'),
-    }),
-    func: async (input) => {
-      const result = { tool: 'moveObject' as const, ...input };
-      return JSON.stringify({
-        _observation: `Planned move: ${input.shapeId} → ${input.direction} (${input.distance}).`,
-        ...result,
-      });
-    },
-  });
-
-  const createShape = new DynamicStructuredTool({
-    name: 'createShape',
-    description:
-      'Create a geometric shape on the board (rectangle, ellipse, diamond, triangle, star, cloud, etc.). ' +
-      'Returns a ref ID for use in subsequent tool calls.',
-    schema: z.object({
-      geoType: z
-        .enum([
-          'rectangle', 'ellipse', 'diamond', 'triangle', 'star',
-          'cloud', 'hexagon', 'pentagon', 'octagon', 'arrow-right',
-          'arrow-left', 'arrow-up', 'arrow-down', 'x-box', 'check-box',
-        ])
-        .describe('The geometric shape type'),
-      x: z.number().describe('X position on the canvas'),
-      y: z.number().describe('Y position on the canvas'),
-      width: z.number().describe('Width in pixels'),
-      height: z.number().describe('Height in pixels'),
-      color: TLColorEnum.describe('Fill colour'),
-      text: z.string().nullable().describe('Text label inside the shape, or null for none'),
-    }),
-    func: async (input) => {
-      const ref = nextRef('shape');
-      const result = { tool: 'createShape' as const, ref, ...input };
-      return JSON.stringify({
-        _observation: `Planned shape ${ref}: ${input.geoType} (${input.width}x${input.height}) at (${input.x},${input.y}), color=${input.color}${input.text ? `, text="${input.text}"` : ''}.`,
-        ...result,
-      });
-    },
-  });
-
-  const resizeObject = new DynamicStructuredTool({
-    name: 'resizeObject',
-    description:
-      'Resize an existing shape on the board by setting new width and height.',
-    schema: z.object({
-      shapeId: z
-        .string()
-        .describe('The tldraw shape ID or ref ID of the shape to resize'),
-      width: z.number().describe('New width in pixels'),
-      height: z.number().describe('New height in pixels'),
-    }),
-    func: async (input) => {
-      const result = { tool: 'resizeObject' as const, ...input };
-      return JSON.stringify({
-        _observation: `Planned resize: ${input.shapeId} → ${input.width}x${input.height}.`,
-        ...result,
-      });
-    },
-  });
-
-  const updateText = new DynamicStructuredTool({
-    name: 'updateText',
-    description:
-      'Update the text content of an existing shape (note, geo shape, or arrow).',
-    schema: z.object({
-      shapeId: z
-        .string()
-        .describe('The tldraw shape ID or ref ID of the shape to update'),
-      newText: z.string().describe('The new text content'),
-    }),
-    func: async (input) => {
-      const result = { tool: 'updateText' as const, ...input };
-      return JSON.stringify({
-        _observation: `Planned text update: ${input.shapeId} → "${input.newText}".`,
-        ...result,
-      });
-    },
-  });
-
-  const changeColor = new DynamicStructuredTool({
-    name: 'changeColor',
-    description:
-      'Change the colour of an existing shape on the board.',
-    schema: z.object({
-      shapeId: z
-        .string()
-        .describe('The tldraw shape ID or ref ID of the shape to recolour'),
-      color: TLColorEnum.describe('The new tldraw colour'),
-    }),
-    func: async (input) => {
-      const result = { tool: 'changeColor' as const, ...input };
-      return JSON.stringify({
-        _observation: `Planned colour change: ${input.shapeId} → ${input.color}.`,
-        ...result,
-      });
-    },
-  });
-
-  return [createFrame, createLayout, createConnector, moveObject, createShape, resizeObject, updateText, changeColor];
+  return [createElements, updateElements, layoutElements, createDiagram];
 }
 
-// ── System prompt ─────────────────────────────────────────────────────────────
+// ── Spatial system prompt builder ─────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are an AI assistant that builds layouts on a collaborative whiteboard.
+function buildSystemPrompt(boardState: unknown[]): string {
+  return `You are an expert architecture assistant for a 2D whiteboard.
 
-## Available tools
+YOUR CAPABILITIES:
+1. You do not calculate X/Y coordinates. You output intent, and the system executes the math.
+2. To edit or layout existing shapes, you MUST look at the CURRENT BOARD STATE below. Find the exact 'id' of the shape the user wants to change, and pass it to the 'updateElements' or 'layoutElements' tool.
+3. DO NOT hallucinate shape IDs. Match them exactly from the state.
 
-1. **createFrame** — create a labelled section/container. Returns a ref ID.
-2. **createLayout** — place sticky notes in a structured pattern (grid, columns, mindmap, timeline, list). Can target an existing frame via targetFrameRef.
-3. **createConnector** — draw an arrow between two shapes or refs.
-4. **moveObject** — reposition an existing shape by semantic direction.
-5. **createShape** — create a geometric shape (rectangle, ellipse, diamond, triangle, star, cloud, etc.) with position, size, colour, and optional text. Returns a ref ID.
-6. **resizeObject** — resize an existing shape by setting new width and height.
-7. **updateText** — change the text content of an existing shape.
-8. **changeColor** — change the colour of an existing shape.
+AVAILABLE TOOLS:
+- **createElements**: Create ad-hoc elements (sticky notes, shapes, text, connectors). No coordinates needed.
+- **updateElements**: Edit existing shapes by ID — change text, color, resize (double/half/fit-to-content), or move (left/right/up/down/closer-together).
+- **layoutElements**: Arrange existing shapes by ID into a grid, row, column, or even spacing.
+- **createDiagram**: Create structured framed layouts (SWOT, kanban, user journey, retrospective, custom frames) with sections and items.
 
-## How to plan multi-step operations
-
-For complex requests, THINK STEP BY STEP:
-
-1. **Create frames first** — if the user wants columns, sections, or groups, call createFrame for each one. Note the ref IDs returned.
-2. **Populate frames** — call createLayout with targetFrameRef pointing to each frame's ref ID.
-3. **Connect things** — call createConnector to draw arrows if the user wants flows or relationships.
-4. **Add shapes** — use createShape for diagrams, flowcharts, or visual elements beyond sticky notes.
-5. **Modify existing** — use resizeObject, updateText, or changeColor to modify shapes already on the board.
-
-### Example: "Set up a retrospective board with 3 columns"
-
-Step 1: createFrame(label="What Went Well", position="left")    → ref:frame_1
-Step 2: createFrame(label="What Didn't Go Well", position="center") → ref:frame_2
-Step 3: createFrame(label="Action Items", position="right")     → ref:frame_3
-Step 4: createLayout(layoutType="list", targetFrameRef="ref:frame_1", items=[starter notes...])
-Step 5: createLayout(layoutType="list", targetFrameRef="ref:frame_2", items=[starter notes...])
-Step 6: createLayout(layoutType="list", targetFrameRef="ref:frame_3", items=[starter notes...])
-
-### Example: "Build a user journey map with 5 stages"
-
-Step 1: createFrame for each stage (Awareness, Consideration, Purchase, Retention, Advocacy)
-Step 2: createLayout inside each frame with relevant touchpoints
-Step 3: createConnector between consecutive stages
-
-### Example: "Create a blue rectangle with the text 'Start'"
-
-Step 1: createShape(geoType="rectangle", x=100, y=100, width=200, height=100, color="blue", text="Start")
-
-### Example: "Make the title bigger and change it to red"
-
-Step 1: resizeObject(shapeId="shape:abc", width=400, height=200)
-Step 2: changeColor(shapeId="shape:abc", color="red")
-
-## Rules
-
+RULES:
 1. Always use tools. Never return plain text as your final answer.
-2. Create frames BEFORE populating them with createLayout.
-3. Use the ref IDs from previous tool calls to chain operations.
-4. When the user provides board state, reference existing shape IDs from it.
-5. Pick sensible defaults: frame positions should flow left-to-right, colours should vary for visual distinction.
-6. For brainstorming prompts, generate 3-6 realistic starter items per section.
-7. Use createShape for geometric shapes and diagrams; use createLayout for groups of sticky notes.
-8. When modifying existing shapes, use their shape IDs from the board state.`;
+2. For quick ad-hoc elements, use createElements.
+3. For structured layouts with frames, use createDiagram.
+4. For editing existing shapes, use updateElements with exact shape IDs from the board state.
+5. For rearranging existing shapes, use layoutElements with exact shape IDs.
+6. Generate 3-6 realistic starter items per section when brainstorming.
+7. Use varied colours for visual distinction.
 
-// ── Prompt template ───────────────────────────────────────────────────────────
-
-const PROMPT = ChatPromptTemplate.fromMessages([
-  ['system', SYSTEM_PROMPT],
-  [
-    'human',
-    'Current board state (JSON, may be empty):\n{boardState}\n\nUser request: {input}',
-  ],
-  new MessagesPlaceholder('agent_scratchpad'),
-]);
+CURRENT BOARD STATE:
+${JSON.stringify(boardState, null, 2)}`;
+}
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
 export interface AgentToolCall {
   tool: string;
-  ref?: string;
-  frameRef?: string;
   [key: string]: unknown;
 }
 
@@ -393,35 +243,35 @@ export async function runAgent(
   boardState: unknown[],
   signal?: AbortSignal,
 ): Promise<AgentToolCall[]> {
-  const nextRef = makeRefCounter();
-  const tools = buildTools(nextRef);
+  const tools = buildTools();
   const llm = getLLM();
 
-  const agent = await createToolCallingAgent({ llm, tools, prompt: PROMPT });
+  const prompt = ChatPromptTemplate.fromMessages([
+    ['system', buildSystemPrompt(boardState)],
+    ['human', '{input}'],
+    new MessagesPlaceholder('agent_scratchpad'),
+  ]);
+
+  const agent = await createToolCallingAgent({ llm, tools, prompt });
 
   const executor = new AgentExecutor({
     agent,
     tools,
     returnIntermediateSteps: true,
-    maxIterations: 12, // enough for a 5-column board with connectors
+    maxIterations: 8,
   });
 
   const result = await executor.invoke(
-    {
-      input: userPrompt,
-      boardState: JSON.stringify(boardState, null, 2),
-    },
+    { input: userPrompt },
     { signal },
   );
 
   // Collect tool calls from intermediate steps.
-  // Each step.observation is the JSON string our tool func returned.
   const toolCalls: AgentToolCall[] = [];
 
   for (const step of result.intermediateSteps ?? []) {
     try {
       const parsed = JSON.parse(step.observation as string);
-      // Strip the _observation field (that was for the LLM, not the frontend).
       const { _observation, ...call } = parsed;
       toolCalls.push(call as AgentToolCall);
     } catch {

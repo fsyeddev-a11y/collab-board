@@ -27,9 +27,9 @@ export type AIServiceRequest = AIGenerateRequest;
 
 // ── Tool execution records returned by the agent ──────────────────────────────
 //
-// Each entry is one planned operation.  The agent assigns ref IDs (e.g.
-// "ref:frame_1") so later steps can reference earlier ones.  The frontend
-// resolves refs to real tldraw shape IDs when applying the calls to the canvas.
+// Compound Tool Strategy: the LLM outputs high-level declarative intent.
+// The frontend handles all canvas math, frame creation, and element placement.
+// No x/y coordinates — the LLM only provides content structure and semantic instructions.
 
 // tldraw colour palette shared between agent tool schemas and frontend
 export const TLToolColorSchema = z.enum([
@@ -38,102 +38,75 @@ export const TLToolColorSchema = z.enum([
   'grey', 'white',
 ]);
 
-export const CreateFrameToolCallSchema = z.object({
-  tool: z.literal('createFrame'),
-  ref: z.string(),                   // e.g. "ref:frame_1"
-  label: z.string(),
-  position: z.enum(['auto', 'left', 'center', 'right', 'far-right']).default('auto'),
-  size: z.enum(['small', 'medium', 'large']).default('medium'),
+// ── 1. Ad-hoc element creation (no coordinates) ─────────────────────────────
+
+export const CreateElementSchema = z.object({
+  type: z.enum(['sticky', 'shape', 'text', 'connector']),
+  color: TLToolColorSchema.optional(),
+  text: z.string().optional(),
 });
 
-export const CreateLayoutToolCallSchema = z.object({
-  tool: z.literal('createLayout'),
-  ref: z.string(),                   // e.g. "ref:layout_1"
-  layoutType: z.enum(['grid', 'columns', 'mindmap', 'timeline', 'list']),
-  items: z.array(z.object({
-    text: z.string(),
-    color: TLToolColorSchema.nullable().optional(),
+export const CreateElementsToolCallSchema = z.object({
+  tool: z.literal('createElements'),
+  elements: z.array(CreateElementSchema),
+});
+
+// ── 2. Batch edit tool (semantic instructions) ──────────────────────────────
+
+export const ElementUpdateSchema = z.object({
+  shapeId: z.string(),
+  newText: z.string().optional(),
+  newColor: TLToolColorSchema.optional(),
+  resizeInstruction: z.enum(['double', 'half', 'fit-to-content']).optional(),
+  moveInstruction: z.enum(['left', 'right', 'up', 'down', 'closer-together']).optional(),
+});
+
+export const UpdateElementsToolCallSchema = z.object({
+  tool: z.literal('updateElements'),
+  updates: z.array(ElementUpdateSchema),
+});
+
+// ── 3. Layout existing shapes ───────────────────────────────────────────────
+
+export const LayoutElementsToolCallSchema = z.object({
+  tool: z.literal('layoutElements'),
+  shapeIds: z.array(z.string()),
+  layoutType: z.enum(['grid', 'horizontal-row', 'vertical-column', 'even-spacing']),
+});
+
+// ── 4. Compound diagram creation (frames + templates) ───────────────────────
+
+export const CreateDiagramToolCallSchema = z.object({
+  tool: z.literal('createDiagram'),
+  diagramType: z.enum(['swot', 'kanban', 'user_journey', 'retrospective', 'custom_frame']),
+  title: z.string(),
+  sections: z.array(z.object({
+    sectionTitle: z.string(),
+    items: z.array(z.string()),
   })),
-  frameLabel: z.string().nullable().optional(),
-  frameRef: z.string().nullable().optional(),   // ref of auto-created or targeted frame
-  targetFrameRef: z.string().nullable().optional(), // ref to nest inside an existing frame
 });
 
-export const CreateConnectorToolCallSchema = z.object({
-  tool: z.literal('createConnector'),
-  ref: z.string(),
-  fromRef: z.string(),               // shape ID or ref ID
-  toRef: z.string(),
-  label: z.string().nullable().optional(),
-});
-
-export const MoveObjectToolCallSchema = z.object({
-  tool: z.literal('moveObject'),
-  shapeId: z.string(),
-  direction: z.enum(['left', 'right', 'up', 'down']),
-  distance: z.enum(['small', 'medium', 'large']).default('medium'),
-});
-
-export const CreateShapeToolCallSchema = z.object({
-  tool: z.literal('createShape'),
-  ref: z.string(),
-  geoType: z.enum([
-    'rectangle', 'ellipse', 'diamond', 'triangle', 'star',
-    'cloud', 'hexagon', 'pentagon', 'octagon', 'arrow-right',
-    'arrow-left', 'arrow-up', 'arrow-down', 'x-box', 'check-box',
-  ]),
-  x: z.number(),
-  y: z.number(),
-  width: z.number(),
-  height: z.number(),
-  color: TLToolColorSchema,
-  text: z.string().nullable().optional(),
-});
-
-export const ResizeObjectToolCallSchema = z.object({
-  tool: z.literal('resizeObject'),
-  shapeId: z.string(),
-  width: z.number(),
-  height: z.number(),
-});
-
-export const UpdateTextToolCallSchema = z.object({
-  tool: z.literal('updateText'),
-  shapeId: z.string(),
-  newText: z.string(),
-});
-
-export const ChangeColorToolCallSchema = z.object({
-  tool: z.literal('changeColor'),
-  shapeId: z.string(),
-  color: TLToolColorSchema,
-});
+// ── Discriminated union ─────────────────────────────────────────────────────
 
 export const ToolCallSchema = z.discriminatedUnion('tool', [
-  CreateFrameToolCallSchema,
-  CreateLayoutToolCallSchema,
-  CreateConnectorToolCallSchema,
-  MoveObjectToolCallSchema,
-  CreateShapeToolCallSchema,
-  ResizeObjectToolCallSchema,
-  UpdateTextToolCallSchema,
-  ChangeColorToolCallSchema,
+  CreateElementsToolCallSchema,
+  UpdateElementsToolCallSchema,
+  LayoutElementsToolCallSchema,
+  CreateDiagramToolCallSchema,
 ]);
 
 export type ToolCall = z.infer<typeof ToolCallSchema>;
-export type CreateFrameToolCall = z.infer<typeof CreateFrameToolCallSchema>;
-export type CreateLayoutToolCall = z.infer<typeof CreateLayoutToolCallSchema>;
-export type CreateConnectorToolCall = z.infer<typeof CreateConnectorToolCallSchema>;
-export type MoveObjectToolCall = z.infer<typeof MoveObjectToolCallSchema>;
-export type CreateShapeToolCall = z.infer<typeof CreateShapeToolCallSchema>;
-export type ResizeObjectToolCall = z.infer<typeof ResizeObjectToolCallSchema>;
-export type UpdateTextToolCall = z.infer<typeof UpdateTextToolCallSchema>;
-export type ChangeColorToolCall = z.infer<typeof ChangeColorToolCallSchema>;
+export type CreateElement = z.infer<typeof CreateElementSchema>;
+export type CreateElementsToolCall = z.infer<typeof CreateElementsToolCallSchema>;
+export type ElementUpdate = z.infer<typeof ElementUpdateSchema>;
+export type UpdateElementsToolCall = z.infer<typeof UpdateElementsToolCallSchema>;
+export type LayoutElementsToolCall = z.infer<typeof LayoutElementsToolCallSchema>;
+export type CreateDiagramToolCall = z.infer<typeof CreateDiagramToolCallSchema>;
 
 // ── Hono AI Service → CF Worker ───────────────────────────────────────────────
 export const AIServiceResponseSchema = z.object({
   toolCalls: z.array(ToolCallSchema),
-  modelUsed: z.string().optional(),   // e.g. "google/gemini-2.0-flash-exp:free"
+  modelUsed: z.string().optional(),   // e.g. "openai/gpt-4o-mini"
 });
 
 export type AIServiceResponse = z.infer<typeof AIServiceResponseSchema>;
