@@ -202,10 +202,12 @@ function buildTools() {
   return [createElements, updateElements, layoutElements, createDiagram];
 }
 
-// ── Spatial system prompt builder ─────────────────────────────────────────────
+// ── Spatial system prompt ─────────────────────────────────────────────────────
+//
+// Board state is injected as a {boardState} template variable — NOT inlined
+// directly — because JSON braces would break LangChain's f-string parser.
 
-function buildSystemPrompt(boardState: unknown[]): string {
-  return `You are an expert architecture assistant for a 2D whiteboard.
+const SYSTEM_PROMPT = `You are an expert architecture assistant for a 2D whiteboard.
 
 YOUR CAPABILITIES:
 1. You do not calculate X/Y coordinates. You output intent, and the system executes the math.
@@ -228,8 +230,7 @@ RULES:
 7. Use varied colours for visual distinction.
 
 CURRENT BOARD STATE:
-${JSON.stringify(boardState, null, 2)}`;
-}
+{boardState}`;
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
@@ -247,7 +248,7 @@ export async function runAgent(
   const llm = getLLM();
 
   const prompt = ChatPromptTemplate.fromMessages([
-    ['system', buildSystemPrompt(boardState)],
+    ['system', SYSTEM_PROMPT],
     ['human', '{input}'],
     new MessagesPlaceholder('agent_scratchpad'),
   ]);
@@ -262,7 +263,10 @@ export async function runAgent(
   });
 
   const result = await executor.invoke(
-    { input: userPrompt },
+    {
+      input: userPrompt,
+      boardState: JSON.stringify(boardState, null, 2),
+    },
     { signal },
   );
 
