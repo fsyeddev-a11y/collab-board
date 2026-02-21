@@ -108,16 +108,22 @@ function buildTools() {
         .array(
           z.object({
             shapeId: z.string().describe('The exact tldraw shape ID from the board state'),
-            newText: z.string().optional().describe('New text content for the shape'),
-            newColor: TLColorEnum.optional().describe('New tldraw colour'),
-            resizeInstruction: z
-              .enum(['double', 'half', 'fit-to-content'])
-              .optional()
-              .describe('How to resize: double the size, halve it, or fit to content'),
-            moveInstruction: z
-              .enum(['left', 'right', 'up', 'down', 'closer-together'])
-              .optional()
-              .describe('Direction to move the shape'),
+            newText: z.preprocess(
+              (v) => (v === '' ? undefined : v),
+              z.string().optional(),
+            ).describe('New text content for the shape, or omit to leave unchanged'),
+            newColor: z.preprocess(
+              (v) => (v === '' ? undefined : v),
+              TLColorEnum.optional(),
+            ).describe('New tldraw colour, or omit to leave unchanged'),
+            resizeInstruction: z.preprocess(
+              (v) => (v === '' ? undefined : v),
+              z.enum(['double', 'half', 'fit-to-content']).optional(),
+            ).describe('How to resize: double, half, or fit-to-content. Omit to leave unchanged'),
+            moveInstruction: z.preprocess(
+              (v) => (v === '' ? undefined : v),
+              z.enum(['left', 'right', 'up', 'down', 'closer-together']).optional(),
+            ).describe('Direction to move the shape. Omit to leave unchanged'),
           }),
         )
         .min(1),
