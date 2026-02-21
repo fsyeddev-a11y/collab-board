@@ -85,6 +85,8 @@ function calcFrameHeight(itemCount: number): number {
 // ── Main resolver ─────────────────────────────────────────────────────────────
 
 export function resolveToolCalls(editor: Editor, toolCalls: ToolCall[]): void {
+  const createdFrameIds: string[] = [];
+
   editor.batch(() => {
     for (const call of toolCalls) {
       switch (call.tool) {
@@ -98,11 +100,48 @@ export function resolveToolCalls(editor: Editor, toolCalls: ToolCall[]): void {
           resolveLayoutElements(editor, call);
           break;
         case 'createDiagram':
-          resolveCreateDiagram(editor, call);
+          createdFrameIds.push(...resolveCreateDiagram(editor, call));
           break;
       }
     }
   });
+
+  // Post-batch: bounds are now accurate. Resize frames to fit their children.
+  if (createdFrameIds.length > 0) {
+    fitFramesToChildren(editor, createdFrameIds);
+  }
+}
+
+// ── Post-batch frame resize ──────────────────────────────────────────────────
+
+function fitFramesToChildren(editor: Editor, frameIds: string[]): void {
+  for (const fid of frameIds) {
+    const frameId = fid as ReturnType<typeof createShapeId>;
+    const children = editor.getSortedChildIdsForParent(frameId);
+    if (children.length === 0) continue;
+
+    const frameBounds = editor.getShapePageBounds(frameId);
+    const childBounds = children
+      .map((cid) => editor.getShapePageBounds(cid))
+      .filter(Boolean);
+
+    if (childBounds.length > 0 && frameBounds) {
+      const contentMaxX = Math.max(...childBounds.map((b) => b!.maxX));
+      const contentMaxY = Math.max(...childBounds.map((b) => b!.maxY));
+
+      const neededW = (contentMaxX - frameBounds.x) + NOTE_PADDING;
+      const neededH = (contentMaxY - frameBounds.y) + FRAME_BOTTOM_PADDING;
+
+      editor.updateShape({
+        id: frameId,
+        type: 'frame',
+        props: {
+          w: Math.max(neededW, MIN_FRAME_HEIGHT),
+          h: Math.max(neededH, MIN_FRAME_HEIGHT),
+        },
+      });
+    }
+  }
 }
 
 // ── Find clear canvas area ───────────────────────────────────────────────────
@@ -205,7 +244,7 @@ function resolveCreateElements(editor: Editor, call: CreateElementsCall): void {
           props: {
             w: 300,
             h: 300,
-            name: el.text ?? 'Frame',
+            name: el.text || 'Frame',
           },
         });
         break;
@@ -403,97 +442,89 @@ function resolveLayoutElements(editor: Editor, call: LayoutElementsCall): void {
 
 // ── 4. createDiagram resolver ───────────────────────────────────────────────
 
-function resolveCreateDiagram(editor: Editor, call: CreateDiagramCall): void {
+function resolveCreateDiagram(editor: Editor, call: CreateDiagramCall): string[] {
   switch (call.diagramType) {
     case 'swot':
-      layoutSwot(editor, call);
-      break;
+      return layoutSwot(editor, call);
     case 'kanban':
     case 'retrospective':
     case 'custom_frame':
-      layoutColumns(editor, call);
-      break;
+      return layoutColumns(editor, call);
     case 'user_journey':
-      layoutUserJourney(editor, call);
-      break;
+      return layoutUserJourney(editor, call);
     default:
-      layoutColumns(editor, call);
-      break;
+      return layoutColumns(editor, call);
   }
 }
 
 // ── SWOT: 2x2 grid of frames ────────────────────────────────────────────────
 
-function layoutSwot(editor: Editor, call: CreateDiagramCall): void {
+function layoutSwot(editor: Editor, call: CreateDiagramCall): string[] {
   const start = findStartPosition(editor);
   const adjustedStartY = start.y + FRAME_LABEL_HEIGHT; // room for first row's label
   const sections = call.sections.slice(0, 4);
+  const allFrameIds: string[] = [];
 
   const frameW = NOTE_W + NOTE_PADDING * 2;
 
-  // Estimated row heights (used as minimums; createFrameWithNotes auto-fits)
   const topRowH = Math.max(
     calcFrameHeight(sections[0]?.items.length ?? 0),
     calcFrameHeight(sections[1]?.items.length ?? 0),
   );
 
-  // Create top row first
-  const topFrameIds: string[] = [];
+  // Create top row
   const topXPositions = [start.x, start.x + frameW + FRAME_GAP];
   for (let i = 0; i < Math.min(sections.length, 2); i++) {
     const fid = createFrameWithNotes(
       editor, sections[i], { x: topXPositions[i], y: adjustedStartY },
       frameW, topRowH, SECTION_COLORS[i % SECTION_COLORS.length],
     );
-    topFrameIds.push(fid);
+    allFrameIds.push(fid);
   }
 
-  // Measure actual top row height after auto-fit (accounts for growY)
-  let actualTopRowH = topRowH;
-  if (topFrameIds.length > 0) {
-    const topBounds = topFrameIds
-      .map((fid) => editor.getShapePageBounds(fid as ReturnType<typeof createShapeId>))
-      .filter(Boolean);
-    if (topBounds.length > 0) {
-      actualTopRowH = Math.max(...topBounds.map((b) => b!.h));
-    }
-  }
-
-  // Create bottom row positioned below actual top row height
-  const bottomRowY = adjustedStartY + actualTopRowH + FRAME_GAP + FRAME_LABEL_HEIGHT;
+  // Position bottom row using deterministic calculated height
+  // (bounds aren't reliable inside editor.batch — post-batch resize handles fit)
+  const bottomRowY = adjustedStartY + topRowH + FRAME_GAP + FRAME_LABEL_HEIGHT;
   const bottomRowH = Math.max(
     calcFrameHeight(sections[2]?.items.length ?? 0),
     calcFrameHeight(sections[3]?.items.length ?? 0),
   );
 
   for (let i = 2; i < sections.length; i++) {
-    createFrameWithNotes(
+    const fid = createFrameWithNotes(
       editor, sections[i], { x: topXPositions[i - 2], y: bottomRowY },
       frameW, bottomRowH, SECTION_COLORS[i % SECTION_COLORS.length],
     );
+    allFrameIds.push(fid);
   }
+
+  return allFrameIds;
 }
 
 // ── Columns: kanban, retrospective, custom_frame ─────────────────────────────
 
-function layoutColumns(editor: Editor, call: CreateDiagramCall): void {
+function layoutColumns(editor: Editor, call: CreateDiagramCall): string[] {
   const start = findStartPosition(editor);
   const adjustedStartY = start.y + FRAME_LABEL_HEIGHT; // room for frame labels
   const frameW = NOTE_W + NOTE_PADDING * 2;
+  const allFrameIds: string[] = [];
   let curX = start.x;
 
   for (let i = 0; i < call.sections.length; i++) {
     const section = call.sections[i];
     const frameH = calcFrameHeight(section.items.length);
 
-    createFrameWithNotes(editor, section, { x: curX, y: adjustedStartY }, frameW, frameH, SECTION_COLORS[i % SECTION_COLORS.length]);
+    const fid = createFrameWithNotes(editor, section, { x: curX, y: adjustedStartY }, frameW, frameH, SECTION_COLORS[i % SECTION_COLORS.length]);
+    allFrameIds.push(fid);
     curX += frameW + FRAME_GAP;
   }
+
+  return allFrameIds;
 }
 
 // ── User Journey: horizontal flow with arrows ────────────────────────────────
 
-function layoutUserJourney(editor: Editor, call: CreateDiagramCall): void {
+function layoutUserJourney(editor: Editor, call: CreateDiagramCall): string[] {
   const start = findStartPosition(editor);
   const adjustedStartY = start.y + FRAME_LABEL_HEIGHT; // room for frame labels
   const frameW = NOTE_W + NOTE_PADDING * 2;
@@ -516,6 +547,8 @@ function layoutUserJourney(editor: Editor, call: CreateDiagramCall): void {
   for (let i = 0; i < frameIds.length - 1; i++) {
     createArrowBetween(editor, frameIds[i], frameIds[i + 1]);
   }
+
+  return frameIds;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -530,22 +563,18 @@ function createFrameWithNotes(
 ): string {
   const frameId = createShapeId();
 
-  // Create frame with generous initial height so notes aren't clipped during creation.
-  // We'll measure actual note bounds and shrink-to-fit afterwards.
-  const generousH = Math.max(frameH, section.items.length * (NOTE_H + NOTE_GAP) * 2);
-
+  // Use the pre-calculated frameH. Post-batch fitFramesToChildren() will
+  // resize to actual content once tldraw has computed growY bounds.
   editor.createShape({
     id: frameId,
     type: 'frame',
     x: pos.x,
     y: pos.y,
-    props: { w: frameW, h: generousH, name: section.sectionTitle },
+    props: { w: frameW, h: frameH, name: section.sectionTitle },
   });
 
-  const noteIds: ReturnType<typeof createShapeId>[] = [];
   for (let i = 0; i < section.items.length; i++) {
     const noteId = createShapeId();
-    noteIds.push(noteId);
     editor.createShape({
       id: noteId,
       type: 'note',
@@ -557,33 +586,6 @@ function createFrameWithNotes(
         color: noteColor,
       },
     } as Parameters<typeof editor.createShape>[0]);
-  }
-
-  // Measure actual note bounds (accounts for growY from text wrapping)
-  // and resize frame to fit all children snugly.
-  if (noteIds.length > 0) {
-    const frameBounds = editor.getShapePageBounds(frameId);
-    const childBounds = noteIds
-      .map((nid) => editor.getShapePageBounds(nid))
-      .filter(Boolean);
-
-    if (childBounds.length > 0 && frameBounds) {
-      const lastChildMaxY = Math.max(...childBounds.map((b) => b!.maxY));
-      const fittedH = (lastChildMaxY - frameBounds.y) + FRAME_BOTTOM_PADDING;
-      const finalH = Math.max(fittedH, MIN_FRAME_HEIGHT);
-      editor.updateShape({
-        id: frameId,
-        type: 'frame',
-        props: { h: finalH },
-      });
-    }
-  } else {
-    // No notes — use the originally calculated height
-    editor.updateShape({
-      id: frameId,
-      type: 'frame',
-      props: { h: frameH },
-    });
   }
 
   return frameId;

@@ -88,7 +88,10 @@ export function buildTools() {
             text: z
               .string()
               .optional()
-              .describe("Text content for the element"),
+              .describe(
+                "Text content for the element. For frames, this becomes the frame's display name/title. " +
+                "Always pass the user's requested name here (e.g. 'Sprint Planning').",
+              ),
           }),
         )
         .min(1)
