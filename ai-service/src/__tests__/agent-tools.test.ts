@@ -53,6 +53,13 @@ describe('createElements tool schema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts frame element type', () => {
+    const result = tool.schema.safeParse({
+      elements: [{ type: 'frame', text: 'Container' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it('rejects more than 30 elements (max 30)', () => {
     const elements = Array.from({ length: 31 }, () => ({ type: 'sticky' }));
     const result = tool.schema.safeParse({ elements });

@@ -137,6 +137,30 @@ describe('resolveToolCalls — createElements', () => {
     expect((geo as any).props.color).toBe('blue');
   });
 
+  it('creates a frame with name', () => {
+    resolveToolCalls(editor, [{
+      tool: 'createElements',
+      elements: [{ type: 'frame', text: 'My Container' }],
+    }]);
+
+    const frames = shapesOfType(editor, 'frame');
+    expect(frames).toHaveLength(1);
+    expect((frames[0] as any).props.name).toBe('My Container');
+    expect((frames[0] as any).props.w).toBe(300);
+    expect((frames[0] as any).props.h).toBe(300);
+  });
+
+  it('creates a frame with default name when text is omitted', () => {
+    resolveToolCalls(editor, [{
+      tool: 'createElements',
+      elements: [{ type: 'frame' }],
+    }]);
+
+    const frames = shapesOfType(editor, 'frame');
+    expect(frames).toHaveLength(1);
+    expect((frames[0] as any).props.name).toBe('Frame');
+  });
+
   it('places new elements below existing shapes', () => {
     // Create an existing shape at y=100
     editor.createShape({
@@ -295,6 +319,36 @@ describe('resolveToolCalls — updateElements', () => {
 
     // Should not throw — just silently skip
     expect(editor.getCurrentPageShapes()).toHaveLength(0);
+  });
+
+  it('fit-to-content resizes a frame to fit its children', () => {
+    // Create a frame with children
+    const frameId = createShapeId();
+    editor.createShape({
+      id: frameId,
+      type: 'frame',
+      x: 800, y: 800,
+      props: { w: 600, h: 600, name: 'Test' },
+    });
+
+    const noteId = createShapeId();
+    editor.createShape({
+      id: noteId,
+      type: 'note',
+      x: 30, y: 60,
+      parentId: frameId,
+      props: { text: 'Child note' },
+    } as Parameters<typeof editor.createShape>[0]);
+
+    resolveToolCalls(editor, [{
+      tool: 'updateElements',
+      updates: [{ shapeId: frameId as string, resizeInstruction: 'fit-to-content' }],
+    }]);
+
+    const frame = editor.getShape(frameId) as any;
+    // Frame should have been resized (not still 600x600)
+    expect(frame.props.w).toBeLessThan(600);
+    expect(frame.props.h).toBeLessThan(600);
   });
 
   it('closer-together moves shapes toward centroid', () => {
@@ -594,6 +648,57 @@ describe('resolveToolCalls — createDiagram', () => {
       // Note bottom should be within frame bounds
       expect(noteBounds!.maxY).toBeLessThanOrEqual(frameBounds!.maxY);
     }
+  });
+
+  it('SWOT frames do not overlap (label spacing)', () => {
+    resolveToolCalls(editor, [{
+      tool: 'createDiagram',
+      diagramType: 'swot',
+      title: 'Overlap Test',
+      sections: [
+        { sectionTitle: 'Strengths', items: ['a', 'b'] },
+        { sectionTitle: 'Weaknesses', items: ['c'] },
+        { sectionTitle: 'Opportunities', items: ['d'] },
+        { sectionTitle: 'Threats', items: ['e'] },
+      ],
+    }]);
+
+    const frames = shapesOfType(editor, 'frame');
+    expect(frames).toHaveLength(4);
+
+    // Check that no two frame bounding boxes overlap
+    const bounds = frames.map((f) => editor.getShapePageBounds(f.id as TLShapeId)!);
+    for (let i = 0; i < bounds.length; i++) {
+      for (let j = i + 1; j < bounds.length; j++) {
+        const a = bounds[i];
+        const b = bounds[j];
+        const overlapsX = a.x < b.maxX && a.maxX > b.x;
+        const overlapsY = a.y < b.maxY && a.maxY > b.y;
+        expect(overlapsX && overlapsY).toBe(false);
+      }
+    }
+  });
+
+  it('column frames have space above for labels', () => {
+    resolveToolCalls(editor, [{
+      tool: 'createDiagram',
+      diagramType: 'kanban',
+      title: 'Label Test',
+      sections: [
+        { sectionTitle: 'Todo', items: ['Task 1'] },
+        { sectionTitle: 'Done', items: ['Task 2'] },
+      ],
+    }]);
+
+    const frames = shapesOfType(editor, 'frame');
+    expect(frames).toHaveLength(2);
+
+    // All frames should start at the same y (with label offset)
+    // and that y should be > the findStartPosition base (at least 28px offset)
+    const ys = frames.map((f) => f.y);
+    expect(ys[0]).toBeCloseTo(ys[1]);
+    // The label height offset means frames start further down than the raw start
+    expect(ys[0]).toBeGreaterThanOrEqual(128); // base 100 + 28 label height
   });
 
   it('sections with empty items still create frames', () => {

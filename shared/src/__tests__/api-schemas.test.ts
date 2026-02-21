@@ -95,7 +95,16 @@ describe('CreateElementsToolCallSchema', () => {
         { type: 'shape', text: 'Box' },
         { type: 'text', text: 'Label' },
         { type: 'connector' },
+        { type: 'frame', text: 'My Frame' },
       ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts frame element type', () => {
+    const result = CreateElementsToolCallSchema.safeParse({
+      tool: 'createElements',
+      elements: [{ type: 'frame', text: 'Container' }],
     });
     expect(result.success).toBe(true);
   });

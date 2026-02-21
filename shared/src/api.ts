@@ -41,7 +41,7 @@ export const TLToolColorSchema = z.enum([
 // ── 1. Ad-hoc element creation (no coordinates) ─────────────────────────────
 
 export const CreateElementSchema = z.object({
-  type: z.enum(['sticky', 'shape', 'text', 'connector']),
+  type: z.enum(['sticky', 'shape', 'text', 'connector', 'frame']),
   color: TLToolColorSchema.optional(),
   text: z.string().optional(),
 });

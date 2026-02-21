@@ -75,10 +75,11 @@ export function buildTools() {
         .array(
           z.object({
             type: z
-              .enum(["sticky", "shape", "text", "connector"])
+              .enum(["sticky", "shape", "text", "connector", "frame"])
               .describe(
                 "sticky: a sticky note; shape: a geometric shape (rectangle); " +
-                  "text: a text label; connector: an arrow/line",
+                  "text: a text label; connector: an arrow/line; " +
+                  "frame: a container frame for grouping elements",
               ),
             color: TLColorEnum.optional().describe(
               "tldraw colour, or omit for default",
@@ -256,6 +257,15 @@ AVAILABLE TOOLS:
 - **layoutElements**: Arrange existing shapes by ID into a grid, row, column, or even spacing.
 - **createDiagram**: Create structured framed layouts (SWOT, kanban, user journey, retrospective, custom frames) with sections and items.
 
+SELECTION CONTEXT:
+- Each shape has an 'isSelected' flag and 'parentId' field in the board state.
+- When the user says "these", "selected", or refers to specific elements without naming IDs,
+  use the shapes where isSelected is true.
+- 'parentId' starting with 'shape:' means the element is inside a frame.
+  'parentId' starting with 'page:' means it is a top-level element.
+- When arranging or moving elements, only operate on the selected shapes unless the user
+  explicitly asks to move all shapes.
+
 RULES:
 1. Always use tools. Never return plain text as your final answer.
 2. For quick ad-hoc elements, use createElements.
@@ -264,6 +274,8 @@ RULES:
 5. For rearranging existing shapes, use layoutElements with exact shape IDs.
 6. Generate 3-6 realistic starter items per section when brainstorming.
 7. Use varied colours for visual distinction.
+8. Move instructions (left/right/up/down) shift shapes by a moderate distance.
+   For large repositioning, use layoutElements to rearrange shapes instead.
 
 CURRENT BOARD STATE:
 {boardState}`;
@@ -298,9 +310,6 @@ export async function runAgent(
     maxIterations: 8,
   });
 
-  console.log("[agent] Tools bound:", tools.map((t) => t.name));
-  console.log("[agent] Model:", process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini");
-
   const result = await executor.invoke(
     {
       input: userPrompt,
@@ -308,9 +317,6 @@ export async function runAgent(
     },
     { signal },
   );
-
-  console.log("[agent] intermediateSteps count:", (result.intermediateSteps ?? []).length);
-  console.log("[agent] output:", typeof result.output === "string" ? result.output.slice(0, 200) : result.output);
 
   // Collect tool calls from intermediate steps.
   const toolCalls: AgentToolCall[] = [];

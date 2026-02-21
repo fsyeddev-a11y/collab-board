@@ -163,11 +163,14 @@ export function BoardPage() {
       if (!token) { setAiError('Not authenticated'); return; }
 
       // Gather current board shapes as context for the agent.
+      const selectedIds = new Set(editorRef.current.getSelectedShapeIds());
       const shapes = editorRef.current.getCurrentPageShapes().map((s) => ({
         id: s.id,
         type: s.type,
         x: s.x,
         y: s.y,
+        parentId: s.parentId,
+        isSelected: selectedIds.has(s.id),
         props: (s as unknown as Record<string, unknown>).props,
       }));
 

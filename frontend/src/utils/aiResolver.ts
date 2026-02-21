@@ -19,7 +19,7 @@ import { createShapeId } from 'tldraw';
 // ── Types matching the shared ToolCall schemas ────────────────────────────────
 
 interface CreateElementEntry {
-  type: 'sticky' | 'shape' | 'text' | 'connector';
+  type: 'sticky' | 'shape' | 'text' | 'connector' | 'frame';
   color?: string;
   text?: string;
 }
@@ -73,6 +73,7 @@ const FRAME_GAP = 40;            // gap between frames
 const FRAME_BOTTOM_PADDING = 20; // extra breathing room at frame bottom
 const MIN_FRAME_HEIGHT = 280;    // minimum frame height even with 0-1 items
 const MOVE_DISTANCE = 150;       // pixels for move instructions
+const FRAME_LABEL_HEIGHT = 28;   // tldraw renders frame name ABOVE frame bounds
 const SECTION_COLORS = ['yellow', 'green', 'blue', 'orange', 'red', 'violet'] as const;
 
 /** Calculate frame height to fully contain a vertical column of notes. */
@@ -193,6 +194,20 @@ function resolveCreateElements(editor: Editor, call: CreateElementsCall): void {
           },
         });
         break;
+
+      case 'frame':
+        editor.createShape({
+          id,
+          type: 'frame',
+          x,
+          y,
+          props: {
+            w: 300,
+            h: 300,
+            name: el.text ?? 'Frame',
+          },
+        });
+        break;
     }
   }
 }
@@ -234,18 +249,52 @@ function resolveUpdateElements(editor: Editor, call: UpdateElementsCall): void {
             newW = bounds.w * 0.5;
             newH = bounds.h * 0.5;
             break;
-          case 'fit-to-content':
-            // No-op for now — tldraw auto-fits text shapes
+          case 'fit-to-content': {
+            if (shape.type === 'frame') {
+              const children = editor.getSortedChildIdsForParent(shapeId);
+              if (children.length > 0) {
+                // Children use local coords (relative to frame), so read x/y/props directly
+                const childShapes = children
+                  .map((cid) => editor.getShape(cid))
+                  .filter(Boolean);
+                if (childShapes.length > 0) {
+                  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                  for (const child of childShapes) {
+                    const cProps = (child as unknown as Record<string, unknown>).props as Record<string, unknown>;
+                    const cw = (typeof cProps?.w === 'number' ? cProps.w : NOTE_W);
+                    const ch = (typeof cProps?.h === 'number' ? cProps.h : NOTE_H);
+                    minX = Math.min(minX, child!.x);
+                    minY = Math.min(minY, child!.y);
+                    maxX = Math.max(maxX, child!.x + cw);
+                    maxY = Math.max(maxY, child!.y + ch);
+                  }
+                  newW = Math.max((maxX - minX) + NOTE_PADDING * 2, MIN_FRAME_HEIGHT);
+                  newH = Math.max((maxY - minY) + FRAME_HEADER + NOTE_PADDING + FRAME_BOTTOM_PADDING, MIN_FRAME_HEIGHT);
+                  // Adjust child positions if they don't start at padding
+                  const offsetX = NOTE_PADDING - minX;
+                  const offsetY = NOTE_PADDING + FRAME_HEADER - minY;
+                  if (Math.abs(offsetX) > 1 || Math.abs(offsetY) > 1) {
+                    for (const child of childShapes) {
+                      editor.updateShape({
+                        id: child!.id,
+                        type: child!.type,
+                        x: child!.x + offsetX,
+                        y: child!.y + offsetY,
+                      });
+                    }
+                  }
+                }
+              }
+            }
             break;
+          }
         }
 
-        if (update.resizeInstruction !== 'fit-to-content') {
-          editor.updateShape({
-            id: shapeId,
-            type: shape.type,
-            props: { w: newW, h: newH },
-          });
-        }
+        editor.updateShape({
+          id: shapeId,
+          type: shape.type,
+          props: { w: newW, h: newH },
+        });
       }
     }
 
@@ -388,6 +437,7 @@ function resolveCreateDiagram(editor: Editor, call: CreateDiagramCall): void {
 
 function layoutSwot(editor: Editor, call: CreateDiagramCall): void {
   const start = findStartPosition(editor);
+  const adjustedStartY = start.y + FRAME_LABEL_HEIGHT; // room for first row's label
   const sections = call.sections.slice(0, 4);
 
   const frameW = NOTE_W + NOTE_PADDING * 2;
@@ -402,11 +452,12 @@ function layoutSwot(editor: Editor, call: CreateDiagramCall): void {
     calcFrameHeight(sections[3]?.items.length ?? 0),
   );
 
+  const bottomRowY = adjustedStartY + topRowH + FRAME_GAP + FRAME_LABEL_HEIGHT;
   const positions = [
-    { x: start.x, y: start.y, h: topRowH },
-    { x: start.x + frameW + FRAME_GAP, y: start.y, h: topRowH },
-    { x: start.x, y: start.y + topRowH + FRAME_GAP, h: bottomRowH },
-    { x: start.x + frameW + FRAME_GAP, y: start.y + topRowH + FRAME_GAP, h: bottomRowH },
+    { x: start.x, y: adjustedStartY, h: topRowH },
+    { x: start.x + frameW + FRAME_GAP, y: adjustedStartY, h: topRowH },
+    { x: start.x, y: bottomRowY, h: bottomRowH },
+    { x: start.x + frameW + FRAME_GAP, y: bottomRowY, h: bottomRowH },
   ];
 
   for (let i = 0; i < sections.length; i++) {
@@ -419,6 +470,7 @@ function layoutSwot(editor: Editor, call: CreateDiagramCall): void {
 
 function layoutColumns(editor: Editor, call: CreateDiagramCall): void {
   const start = findStartPosition(editor);
+  const adjustedStartY = start.y + FRAME_LABEL_HEIGHT; // room for frame labels
   const frameW = NOTE_W + NOTE_PADDING * 2;
   let curX = start.x;
 
@@ -426,7 +478,7 @@ function layoutColumns(editor: Editor, call: CreateDiagramCall): void {
     const section = call.sections[i];
     const frameH = calcFrameHeight(section.items.length);
 
-    createFrameWithNotes(editor, section, { x: curX, y: start.y }, frameW, frameH, SECTION_COLORS[i % SECTION_COLORS.length]);
+    createFrameWithNotes(editor, section, { x: curX, y: adjustedStartY }, frameW, frameH, SECTION_COLORS[i % SECTION_COLORS.length]);
     curX += frameW + FRAME_GAP;
   }
 }
@@ -435,6 +487,7 @@ function layoutColumns(editor: Editor, call: CreateDiagramCall): void {
 
 function layoutUserJourney(editor: Editor, call: CreateDiagramCall): void {
   const start = findStartPosition(editor);
+  const adjustedStartY = start.y + FRAME_LABEL_HEIGHT; // room for frame labels
   const frameW = NOTE_W + NOTE_PADDING * 2;
   const frameIds: string[] = [];
   let curX = start.x;
@@ -444,7 +497,7 @@ function layoutUserJourney(editor: Editor, call: CreateDiagramCall): void {
     const frameH = calcFrameHeight(section.items.length);
 
     const frameId = createFrameWithNotes(
-      editor, section, { x: curX, y: start.y }, frameW, frameH,
+      editor, section, { x: curX, y: adjustedStartY }, frameW, frameH,
       SECTION_COLORS[i % SECTION_COLORS.length],
     );
     frameIds.push(frameId);
