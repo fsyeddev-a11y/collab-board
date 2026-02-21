@@ -299,6 +299,9 @@ export async function runAgent(
     maxIterations: 8,
   });
 
+  console.log("[agent] Tools bound:", tools.map((t) => t.name));
+  console.log("[agent] Model:", process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini");
+
   const result = await executor.invoke(
     {
       input: userPrompt,
@@ -306,6 +309,9 @@ export async function runAgent(
     },
     { signal },
   );
+
+  console.log("[agent] intermediateSteps count:", (result.intermediateSteps ?? []).length);
+  console.log("[agent] output:", typeof result.output === "string" ? result.output.slice(0, 200) : result.output);
 
   // Collect tool calls from intermediate steps.
   const toolCalls: AgentToolCall[] = [];
