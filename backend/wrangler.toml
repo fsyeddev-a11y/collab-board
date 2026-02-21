@@ -33,3 +33,6 @@ name = "collabboard-backend-dev"
 
 [env.production]
 name = "collabboard-backend"
+
+[vars]
+AGENT_URL = "https://collab-board-l8zj.onrender.com"

@@ -74,11 +74,50 @@ export const MoveObjectToolCallSchema = z.object({
   distance: z.enum(['small', 'medium', 'large']).default('medium'),
 });
 
+export const CreateShapeToolCallSchema = z.object({
+  tool: z.literal('createShape'),
+  ref: z.string(),
+  geoType: z.enum([
+    'rectangle', 'ellipse', 'diamond', 'triangle', 'star',
+    'cloud', 'hexagon', 'pentagon', 'octagon', 'arrow-right',
+    'arrow-left', 'arrow-up', 'arrow-down', 'x-box', 'check-box',
+  ]),
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number(),
+  color: TLToolColorSchema,
+  text: z.string().optional(),
+});
+
+export const ResizeObjectToolCallSchema = z.object({
+  tool: z.literal('resizeObject'),
+  shapeId: z.string(),
+  width: z.number(),
+  height: z.number(),
+});
+
+export const UpdateTextToolCallSchema = z.object({
+  tool: z.literal('updateText'),
+  shapeId: z.string(),
+  newText: z.string(),
+});
+
+export const ChangeColorToolCallSchema = z.object({
+  tool: z.literal('changeColor'),
+  shapeId: z.string(),
+  color: TLToolColorSchema,
+});
+
 export const ToolCallSchema = z.discriminatedUnion('tool', [
   CreateFrameToolCallSchema,
   CreateLayoutToolCallSchema,
   CreateConnectorToolCallSchema,
   MoveObjectToolCallSchema,
+  CreateShapeToolCallSchema,
+  ResizeObjectToolCallSchema,
+  UpdateTextToolCallSchema,
+  ChangeColorToolCallSchema,
 ]);
 
 export type ToolCall = z.infer<typeof ToolCallSchema>;
@@ -86,6 +125,10 @@ export type CreateFrameToolCall = z.infer<typeof CreateFrameToolCallSchema>;
 export type CreateLayoutToolCall = z.infer<typeof CreateLayoutToolCallSchema>;
 export type CreateConnectorToolCall = z.infer<typeof CreateConnectorToolCallSchema>;
 export type MoveObjectToolCall = z.infer<typeof MoveObjectToolCallSchema>;
+export type CreateShapeToolCall = z.infer<typeof CreateShapeToolCallSchema>;
+export type ResizeObjectToolCall = z.infer<typeof ResizeObjectToolCallSchema>;
+export type UpdateTextToolCall = z.infer<typeof UpdateTextToolCallSchema>;
+export type ChangeColorToolCall = z.infer<typeof ChangeColorToolCallSchema>;
 
 // ── Hono AI Service → CF Worker ───────────────────────────────────────────────
 export const AIServiceResponseSchema = z.object({

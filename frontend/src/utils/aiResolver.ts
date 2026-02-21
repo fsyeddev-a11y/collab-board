@@ -56,11 +56,46 @@ interface MoveObjectCall {
   distance?: string;
 }
 
+interface CreateShapeCall {
+  tool: 'createShape';
+  ref: string;
+  geoType: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  text?: string;
+}
+
+interface ResizeObjectCall {
+  tool: 'resizeObject';
+  shapeId: string;
+  width: number;
+  height: number;
+}
+
+interface UpdateTextCall {
+  tool: 'updateText';
+  shapeId: string;
+  newText: string;
+}
+
+interface ChangeColorCall {
+  tool: 'changeColor';
+  shapeId: string;
+  color: string;
+}
+
 type ToolCall =
   | CreateFrameCall
   | CreateLayoutCall
   | CreateConnectorCall
-  | MoveObjectCall;
+  | MoveObjectCall
+  | CreateShapeCall
+  | ResizeObjectCall
+  | UpdateTextCall
+  | ChangeColorCall;
 
 // ── Layout geometry constants ─────────────────────────────────────────────────
 
@@ -111,6 +146,18 @@ export function resolveToolCalls(editor: Editor, toolCalls: ToolCall[]): void {
           break;
         case 'moveObject':
           resolveMoveObject(editor, call);
+          break;
+        case 'createShape':
+          resolveCreateShape(editor, call, refMap);
+          break;
+        case 'resizeObject':
+          resolveResizeObject(editor, call, refMap);
+          break;
+        case 'updateText':
+          resolveUpdateText(editor, call, refMap);
+          break;
+        case 'changeColor':
+          resolveChangeColor(editor, call, refMap);
           break;
       }
     }
@@ -425,4 +472,82 @@ function resolveMoveObject(editor: Editor, call: MoveObjectCall): void {
   }
 
   editor.nudgeShapes([shapeId], delta);
+}
+
+function resolveCreateShape(
+  editor: Editor,
+  call: CreateShapeCall,
+  refMap: RefMap,
+): void {
+  const id = createShapeId();
+
+  editor.createShape({
+    id,
+    type: 'geo',
+    x: call.x,
+    y: call.y,
+    props: {
+      geo: call.geoType,
+      w: call.width,
+      h: call.height,
+      color: call.color,
+      text: call.text ?? '',
+    },
+  });
+
+  refMap.set(call.ref, id);
+}
+
+function resolveResizeObject(
+  editor: Editor,
+  call: ResizeObjectCall,
+  refMap: RefMap,
+): void {
+  const shapeId = (refMap.get(call.shapeId) ?? call.shapeId) as ReturnType<typeof createShapeId>;
+  if (!editor.getShape(shapeId)) {
+    console.warn('[aiResolver] Skipping resize — shape not found:', call.shapeId);
+    return;
+  }
+
+  editor.updateShape({
+    id: shapeId,
+    type: editor.getShape(shapeId)!.type,
+    props: { w: call.width, h: call.height },
+  });
+}
+
+function resolveUpdateText(
+  editor: Editor,
+  call: UpdateTextCall,
+  refMap: RefMap,
+): void {
+  const shapeId = (refMap.get(call.shapeId) ?? call.shapeId) as ReturnType<typeof createShapeId>;
+  if (!editor.getShape(shapeId)) {
+    console.warn('[aiResolver] Skipping text update — shape not found:', call.shapeId);
+    return;
+  }
+
+  editor.updateShape({
+    id: shapeId,
+    type: editor.getShape(shapeId)!.type,
+    props: { text: call.newText },
+  });
+}
+
+function resolveChangeColor(
+  editor: Editor,
+  call: ChangeColorCall,
+  refMap: RefMap,
+): void {
+  const shapeId = (refMap.get(call.shapeId) ?? call.shapeId) as ReturnType<typeof createShapeId>;
+  if (!editor.getShape(shapeId)) {
+    console.warn('[aiResolver] Skipping color change — shape not found:', call.shapeId);
+    return;
+  }
+
+  editor.updateShape({
+    id: shapeId,
+    type: editor.getShape(shapeId)!.type,
+    props: { color: call.color },
+  });
 }

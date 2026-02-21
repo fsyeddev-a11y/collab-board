@@ -217,7 +217,95 @@ function buildTools(nextRef: (prefix: string) => string) {
     },
   });
 
-  return [createFrame, createLayout, createConnector, moveObject];
+  const createShape = new DynamicStructuredTool({
+    name: 'createShape',
+    description:
+      'Create a geometric shape on the board (rectangle, ellipse, diamond, triangle, star, cloud, etc.). ' +
+      'Returns a ref ID for use in subsequent tool calls.',
+    schema: z.object({
+      geoType: z
+        .enum([
+          'rectangle', 'ellipse', 'diamond', 'triangle', 'star',
+          'cloud', 'hexagon', 'pentagon', 'octagon', 'arrow-right',
+          'arrow-left', 'arrow-up', 'arrow-down', 'x-box', 'check-box',
+        ])
+        .describe('The geometric shape type'),
+      x: z.number().describe('X position on the canvas'),
+      y: z.number().describe('Y position on the canvas'),
+      width: z.number().describe('Width in pixels'),
+      height: z.number().describe('Height in pixels'),
+      color: TLColorEnum.describe('Fill colour'),
+      text: z.string().optional().describe('Optional text label inside the shape'),
+    }),
+    func: async (input) => {
+      const ref = nextRef('shape');
+      const result = { tool: 'createShape' as const, ref, ...input };
+      return JSON.stringify({
+        _observation: `Planned shape ${ref}: ${input.geoType} (${input.width}x${input.height}) at (${input.x},${input.y}), color=${input.color}${input.text ? `, text="${input.text}"` : ''}.`,
+        ...result,
+      });
+    },
+  });
+
+  const resizeObject = new DynamicStructuredTool({
+    name: 'resizeObject',
+    description:
+      'Resize an existing shape on the board by setting new width and height.',
+    schema: z.object({
+      shapeId: z
+        .string()
+        .describe('The tldraw shape ID or ref ID of the shape to resize'),
+      width: z.number().describe('New width in pixels'),
+      height: z.number().describe('New height in pixels'),
+    }),
+    func: async (input) => {
+      const result = { tool: 'resizeObject' as const, ...input };
+      return JSON.stringify({
+        _observation: `Planned resize: ${input.shapeId} → ${input.width}x${input.height}.`,
+        ...result,
+      });
+    },
+  });
+
+  const updateText = new DynamicStructuredTool({
+    name: 'updateText',
+    description:
+      'Update the text content of an existing shape (note, geo shape, or arrow).',
+    schema: z.object({
+      shapeId: z
+        .string()
+        .describe('The tldraw shape ID or ref ID of the shape to update'),
+      newText: z.string().describe('The new text content'),
+    }),
+    func: async (input) => {
+      const result = { tool: 'updateText' as const, ...input };
+      return JSON.stringify({
+        _observation: `Planned text update: ${input.shapeId} → "${input.newText}".`,
+        ...result,
+      });
+    },
+  });
+
+  const changeColor = new DynamicStructuredTool({
+    name: 'changeColor',
+    description:
+      'Change the colour of an existing shape on the board.',
+    schema: z.object({
+      shapeId: z
+        .string()
+        .describe('The tldraw shape ID or ref ID of the shape to recolour'),
+      color: TLColorEnum.describe('The new tldraw colour'),
+    }),
+    func: async (input) => {
+      const result = { tool: 'changeColor' as const, ...input };
+      return JSON.stringify({
+        _observation: `Planned colour change: ${input.shapeId} → ${input.color}.`,
+        ...result,
+      });
+    },
+  });
+
+  return [createFrame, createLayout, createConnector, moveObject, createShape, resizeObject, updateText, changeColor];
 }
 
 // ── System prompt ─────────────────────────────────────────────────────────────
@@ -230,6 +318,10 @@ const SYSTEM_PROMPT = `You are an AI assistant that builds layouts on a collabor
 2. **createLayout** — place sticky notes in a structured pattern (grid, columns, mindmap, timeline, list). Can target an existing frame via targetFrameRef.
 3. **createConnector** — draw an arrow between two shapes or refs.
 4. **moveObject** — reposition an existing shape by semantic direction.
+5. **createShape** — create a geometric shape (rectangle, ellipse, diamond, triangle, star, cloud, etc.) with position, size, colour, and optional text. Returns a ref ID.
+6. **resizeObject** — resize an existing shape by setting new width and height.
+7. **updateText** — change the text content of an existing shape.
+8. **changeColor** — change the colour of an existing shape.
 
 ## How to plan multi-step operations
 
@@ -238,6 +330,8 @@ For complex requests, THINK STEP BY STEP:
 1. **Create frames first** — if the user wants columns, sections, or groups, call createFrame for each one. Note the ref IDs returned.
 2. **Populate frames** — call createLayout with targetFrameRef pointing to each frame's ref ID.
 3. **Connect things** — call createConnector to draw arrows if the user wants flows or relationships.
+4. **Add shapes** — use createShape for diagrams, flowcharts, or visual elements beyond sticky notes.
+5. **Modify existing** — use resizeObject, updateText, or changeColor to modify shapes already on the board.
 
 ### Example: "Set up a retrospective board with 3 columns"
 
@@ -254,6 +348,15 @@ Step 1: createFrame for each stage (Awareness, Consideration, Purchase, Retentio
 Step 2: createLayout inside each frame with relevant touchpoints
 Step 3: createConnector between consecutive stages
 
+### Example: "Create a blue rectangle with the text 'Start'"
+
+Step 1: createShape(geoType="rectangle", x=100, y=100, width=200, height=100, color="blue", text="Start")
+
+### Example: "Make the title bigger and change it to red"
+
+Step 1: resizeObject(shapeId="shape:abc", width=400, height=200)
+Step 2: changeColor(shapeId="shape:abc", color="red")
+
 ## Rules
 
 1. Always use tools. Never return plain text as your final answer.
@@ -261,7 +364,9 @@ Step 3: createConnector between consecutive stages
 3. Use the ref IDs from previous tool calls to chain operations.
 4. When the user provides board state, reference existing shape IDs from it.
 5. Pick sensible defaults: frame positions should flow left-to-right, colours should vary for visual distinction.
-6. For brainstorming prompts, generate 3-6 realistic starter items per section.`;
+6. For brainstorming prompts, generate 3-6 realistic starter items per section.
+7. Use createShape for geometric shapes and diagrams; use createLayout for groups of sticky notes.
+8. When modifying existing shapes, use their shape IDs from the board state.`;
 
 // ── Prompt template ───────────────────────────────────────────────────────────
 
