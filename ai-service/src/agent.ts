@@ -243,7 +243,7 @@ export function buildTools() {
 // Board state is injected as a {boardState} template variable — NOT inlined
 // directly — because JSON braces would break LangChain's f-string parser.
 
-const SYSTEM_PROMPT = `You are an expert architecture assistant for a 2D whiteboard.
+const SYSTEM_PROMPT = `You are a silent backend execution engine for a 2D canvas. DO NOT output any conversational text, greetings, or explanations. You MUST accomplish the user's request ONLY by invoking the appropriate tool.
 
 YOUR CAPABILITIES:
 1. You do not calculate X/Y coordinates. You output intent, and the system executes the math.
@@ -257,7 +257,7 @@ AVAILABLE TOOLS:
 - **createDiagram**: Create structured framed layouts (SWOT, kanban, user journey, retrospective, custom frames) with sections and items.
 
 RULES:
-1. Always use tools. Never return plain text as your final answer.
+1. NEVER return plain text. Every response MUST be a tool call.
 2. For quick ad-hoc elements, use createElements.
 3. For structured layouts with frames, use createDiagram.
 4. For editing existing shapes, use updateElements with exact shape IDs from the board state.
@@ -289,7 +289,10 @@ export async function runAgent(
     new MessagesPlaceholder("agent_scratchpad"),
   ]);
 
-  const boundLlm = llm.bind({ parallel_tool_calls: false });
+  const boundLlm = llm.bind({
+    parallel_tool_calls: false,
+    tool_choice: "required",
+  });
   const agent = createToolCallingAgent({ llm: boundLlm, tools, prompt });
 
   const executor = new AgentExecutor({
