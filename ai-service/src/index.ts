@@ -29,8 +29,8 @@ console.log('[ai-service] LangSmith config:', {
 
 const app = new Hono();
 
-// 45s wall-time timeout — agent loops + LLM latency can be long.
-app.use('/generate', timeout(45_000));
+// 120s wall-time timeout — multi-step agent loops need multiple LLM round-trips.
+app.use('/generate', timeout(120_000));
 
 // Internal auth — only our CF Worker may call this.
 app.use('/generate', async (c, next) => {

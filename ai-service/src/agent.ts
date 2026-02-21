@@ -305,11 +305,13 @@ RULES:
    the text content of notes/shapes; newName changes the display title of frames.
 
 MULTI-STEP COMMANDS:
-- When a prompt contains multiple intents (e.g. rename + recolor + create), handle them
-  as separate sequential tool calls — one per intent.
-- Batch related edits into a single updateElements call (e.g. rename all frames in one call,
-  recolor all notes in another).
-- Do NOT duplicate shape IDs across calls unless a later step depends on a prior change.
+- You MUST call all tools in a single response using parallel tool calls whenever possible.
+  For example: rename frames (updateElements), recolor notes (updateElements), and create
+  new elements (createElements or createDiagram) should ALL be called in the SAME response.
+- Combine ALL updates of the same type into ONE updateElements call. For example, renaming
+  5 frames AND recoloring 10 notes should be ONE updateElements call with 15 update entries.
+- Only use sequential tool calls when a later step truly depends on the output of an earlier one.
+- MINIMIZE the number of agent iterations — each round-trip adds latency.
 
 CURRENT BOARD STATE:
 {boardState}`;
@@ -341,7 +343,7 @@ export async function runAgent(
     agent,
     tools,
     returnIntermediateSteps: true,
-    maxIterations: 8,
+    maxIterations: 4,
   });
 
   const result = await executor.invoke(
