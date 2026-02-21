@@ -87,7 +87,7 @@ export const CreateShapeToolCallSchema = z.object({
   width: z.number(),
   height: z.number(),
   color: TLToolColorSchema,
-  text: z.string().optional(),
+  text: z.string().nullable().optional(),
 });
 
 export const ResizeObjectToolCallSchema = z.object({

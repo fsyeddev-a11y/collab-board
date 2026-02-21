@@ -235,7 +235,7 @@ function buildTools(nextRef: (prefix: string) => string) {
       width: z.number().describe('Width in pixels'),
       height: z.number().describe('Height in pixels'),
       color: TLColorEnum.describe('Fill colour'),
-      text: z.string().optional().describe('Optional text label inside the shape'),
+      text: z.string().nullable().describe('Text label inside the shape, or null for none'),
     }),
     func: async (input) => {
       const ref = nextRef('shape');
