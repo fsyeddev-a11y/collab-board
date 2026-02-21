@@ -53,7 +53,20 @@ const TL_COLORS = [
   "white",
 ] as const;
 
-const TLColorEnum = z.enum(TL_COLORS);
+// Map common color names LLMs use to valid tldraw colors
+const COLOR_ALIASES: Record<string, (typeof TL_COLORS)[number]> = {
+  purple: "violet",
+  pink: "light-red",
+  cyan: "light-blue",
+  lime: "light-green",
+  gray: "grey",
+  white: "white",
+};
+
+const TLColorEnum = z.preprocess((v) => {
+  if (typeof v === "string") return COLOR_ALIASES[v.toLowerCase()] ?? v;
+  return v;
+}, z.enum(TL_COLORS));
 
 // ── Compound Tools ────────────────────────────────────────────────────────────
 //
@@ -127,6 +140,14 @@ export function buildTools() {
               )
               .describe(
                 "New text content for the shape, or omit to leave unchanged",
+              ),
+            newName: z
+              .preprocess(
+                (v) => (v === "" ? undefined : v),
+                z.string().optional(),
+              )
+              .describe(
+                "New display name for frame elements (rename a frame). Only applies to frames. Omit to leave unchanged",
               ),
             newColor: z
               .preprocess(
@@ -280,6 +301,15 @@ RULES:
 7. Use varied colours for visual distinction.
 8. Move instructions (left/right/up/down) shift shapes by a moderate distance.
    For large repositioning, use layoutElements to rearrange shapes instead.
+9. To rename a frame, use updateElements with newName (not newText). newText changes
+   the text content of notes/shapes; newName changes the display title of frames.
+
+MULTI-STEP COMMANDS:
+- When a prompt contains multiple intents (e.g. rename + recolor + create), handle them
+  as separate sequential tool calls — one per intent.
+- Batch related edits into a single updateElements call (e.g. rename all frames in one call,
+  recolor all notes in another).
+- Do NOT duplicate shape IDs across calls unless a later step depends on a prior change.
 
 CURRENT BOARD STATE:
 {boardState}`;

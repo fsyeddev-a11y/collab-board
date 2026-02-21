@@ -32,6 +32,7 @@ interface CreateElementsCall {
 interface ElementUpdate {
   shapeId: string;
   newText?: string;
+  newName?: string;
   newColor?: string;
   resizeInstruction?: 'double' | 'half' | 'fit-to-content';
   moveInstruction?: 'left' | 'right' | 'up' | 'down' | 'closer-together';
@@ -297,9 +298,10 @@ function resolveUpdateElements(editor: Editor, call: UpdateElementsCall): void {
       continue;
     }
 
-    // Apply text/color changes
+    // Apply text/color/name changes
     const props: Record<string, unknown> = {};
     if (update.newText !== undefined) props.text = update.newText;
+    if (update.newName !== undefined && shape.type === 'frame') props.name = update.newName;
     if (update.newColor !== undefined) {
       props.color = update.newColor;
       if (shape.type === 'geo') props.fill = 'solid';
