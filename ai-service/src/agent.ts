@@ -63,7 +63,7 @@ const TLColorEnum = z.enum(TL_COLORS);
 //   3. layoutElements   — arrange existing shapes by layout type
 //   4. createDiagram    — complex framed templates
 
-function buildTools() {
+export function buildTools() {
   const createElements = new DynamicStructuredTool({
     name: "createElements",
     description:
