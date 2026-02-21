@@ -289,8 +289,7 @@ export async function runAgent(
     new MessagesPlaceholder("agent_scratchpad"),
   ]);
 
-  const boundLlm = llm.bind({ parallel_tool_calls: false });
-  const agent = createToolCallingAgent({ llm: boundLlm, tools, prompt });
+  const agent = createToolCallingAgent({ llm, tools, prompt });
 
   const executor = new AgentExecutor({
     agent,
