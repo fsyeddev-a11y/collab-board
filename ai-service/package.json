@@ -16,6 +16,7 @@
     "@langchain/openai": "^0.3.16",
     "hono": "^4.6.17",
     "langchain": "^0.3.11",
+    "langsmith": "^0.5.4",
     "zod": "^3.24.1"
   },
   "devDependencies": {
