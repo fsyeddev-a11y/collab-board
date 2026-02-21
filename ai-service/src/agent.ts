@@ -18,7 +18,7 @@ import { z } from "zod";
 
 let _llm: ChatOpenAI | null = null;
 
-function getLLM(): ChatOpenAI {
+export function getLLM(): ChatOpenAI {
   if (!_llm) {
     _llm = new ChatOpenAI({
       openAIApiKey: process.env.OPENROUTER_API_KEY,

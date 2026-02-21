@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { timeout } from 'hono/timeout';
 import { zValidator } from '@hono/zod-validator';
 import { AIServiceRequestSchema, AIServiceResponseSchema } from '@collabboard/shared';
-import { runAgent } from './agent.js';
+import { runAgent, getLLM } from './agent.js';
 
 // ── Environment checks ───────────────────────────────────────────────────────
 
@@ -43,6 +43,15 @@ app.use('/generate', async (c, next) => {
 
 // Health check (no auth — used by Render).
 app.get('/health', (c) => c.json({ status: 'ok' }));
+
+// Warmup endpoint (no auth — called by Render cron or external pinger).
+// Initialises the LLM singleton so the first real /generate isn't slow.
+app.get('/warmup', (c) => {
+  const start = Date.now();
+  getLLM(); // initialise singleton if not already
+  const elapsed = Date.now() - start;
+  return c.json({ status: 'warm', llmInitMs: elapsed });
+});
 
 // POST /generate — main AI endpoint.
 app.post(
