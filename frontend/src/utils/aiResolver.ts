@@ -162,6 +162,7 @@ function resolveCreateElements(editor: Editor, call: CreateElementsCall): void {
             w: NOTE_W,
             h: NOTE_H,
             color: el.color ?? 'blue',
+            fill: 'solid',
             text: el.text ?? '',
           },
         });
@@ -227,7 +228,10 @@ function resolveUpdateElements(editor: Editor, call: UpdateElementsCall): void {
     // Apply text/color changes
     const props: Record<string, unknown> = {};
     if (update.newText !== undefined) props.text = update.newText;
-    if (update.newColor !== undefined) props.color = update.newColor;
+    if (update.newColor !== undefined) {
+      props.color = update.newColor;
+      if (shape.type === 'geo') props.fill = 'solid';
+    }
 
     if (Object.keys(props).length > 0) {
       editor.updateShape({ id: shapeId, type: shape.type, props });
@@ -253,36 +257,21 @@ function resolveUpdateElements(editor: Editor, call: UpdateElementsCall): void {
             if (shape.type === 'frame') {
               const children = editor.getSortedChildIdsForParent(shapeId);
               if (children.length > 0) {
-                // Children use local coords (relative to frame), so read x/y/props directly
-                const childShapes = children
-                  .map((cid) => editor.getShape(cid))
+                const frameBounds = editor.getShapePageBounds(shapeId);
+                // Use page bounds for accurate child dimensions (handles growY, auto-size, etc.)
+                const childBounds = children
+                  .map((cid) => editor.getShapePageBounds(cid))
                   .filter(Boolean);
-                if (childShapes.length > 0) {
-                  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-                  for (const child of childShapes) {
-                    const cProps = (child as unknown as Record<string, unknown>).props as Record<string, unknown>;
-                    const cw = (typeof cProps?.w === 'number' ? cProps.w : NOTE_W);
-                    const ch = (typeof cProps?.h === 'number' ? cProps.h : NOTE_H);
-                    minX = Math.min(minX, child!.x);
-                    minY = Math.min(minY, child!.y);
-                    maxX = Math.max(maxX, child!.x + cw);
-                    maxY = Math.max(maxY, child!.y + ch);
-                  }
-                  newW = Math.max((maxX - minX) + NOTE_PADDING * 2, MIN_FRAME_HEIGHT);
-                  newH = Math.max((maxY - minY) + FRAME_HEADER + NOTE_PADDING + FRAME_BOTTOM_PADDING, MIN_FRAME_HEIGHT);
-                  // Adjust child positions if they don't start at padding
-                  const offsetX = NOTE_PADDING - minX;
-                  const offsetY = NOTE_PADDING + FRAME_HEADER - minY;
-                  if (Math.abs(offsetX) > 1 || Math.abs(offsetY) > 1) {
-                    for (const child of childShapes) {
-                      editor.updateShape({
-                        id: child!.id,
-                        type: child!.type,
-                        x: child!.x + offsetX,
-                        y: child!.y + offsetY,
-                      });
-                    }
-                  }
+                if (childBounds.length > 0 && frameBounds) {
+                  const contentMinX = Math.min(...childBounds.map((b) => b!.x));
+                  const contentMaxX = Math.max(...childBounds.map((b) => b!.maxX));
+                  const contentMinY = Math.min(...childBounds.map((b) => b!.y));
+                  const contentMaxY = Math.max(...childBounds.map((b) => b!.maxY));
+                  // Convert page-space content extent to local frame size
+                  const contentW = contentMaxX - contentMinX;
+                  const contentH = contentMaxY - contentMinY;
+                  newW = Math.max(contentW + NOTE_PADDING * 2, MIN_FRAME_HEIGHT);
+                  newH = Math.max(contentH + FRAME_HEADER + NOTE_PADDING + FRAME_BOTTOM_PADDING, MIN_FRAME_HEIGHT);
                 }
               }
             }
@@ -442,27 +431,46 @@ function layoutSwot(editor: Editor, call: CreateDiagramCall): void {
 
   const frameW = NOTE_W + NOTE_PADDING * 2;
 
-  // Row heights based on the tallest frame in each row
+  // Estimated row heights (used as minimums; createFrameWithNotes auto-fits)
   const topRowH = Math.max(
     calcFrameHeight(sections[0]?.items.length ?? 0),
     calcFrameHeight(sections[1]?.items.length ?? 0),
   );
+
+  // Create top row first
+  const topFrameIds: string[] = [];
+  const topXPositions = [start.x, start.x + frameW + FRAME_GAP];
+  for (let i = 0; i < Math.min(sections.length, 2); i++) {
+    const fid = createFrameWithNotes(
+      editor, sections[i], { x: topXPositions[i], y: adjustedStartY },
+      frameW, topRowH, SECTION_COLORS[i % SECTION_COLORS.length],
+    );
+    topFrameIds.push(fid);
+  }
+
+  // Measure actual top row height after auto-fit (accounts for growY)
+  let actualTopRowH = topRowH;
+  if (topFrameIds.length > 0) {
+    const topBounds = topFrameIds
+      .map((fid) => editor.getShapePageBounds(fid as ReturnType<typeof createShapeId>))
+      .filter(Boolean);
+    if (topBounds.length > 0) {
+      actualTopRowH = Math.max(...topBounds.map((b) => b!.h));
+    }
+  }
+
+  // Create bottom row positioned below actual top row height
+  const bottomRowY = adjustedStartY + actualTopRowH + FRAME_GAP + FRAME_LABEL_HEIGHT;
   const bottomRowH = Math.max(
     calcFrameHeight(sections[2]?.items.length ?? 0),
     calcFrameHeight(sections[3]?.items.length ?? 0),
   );
 
-  const bottomRowY = adjustedStartY + topRowH + FRAME_GAP + FRAME_LABEL_HEIGHT;
-  const positions = [
-    { x: start.x, y: adjustedStartY, h: topRowH },
-    { x: start.x + frameW + FRAME_GAP, y: adjustedStartY, h: topRowH },
-    { x: start.x, y: bottomRowY, h: bottomRowH },
-    { x: start.x + frameW + FRAME_GAP, y: bottomRowY, h: bottomRowH },
-  ];
-
-  for (let i = 0; i < sections.length; i++) {
-    const pos = positions[i] ?? positions[0];
-    createFrameWithNotes(editor, sections[i], { x: pos.x, y: pos.y }, frameW, pos.h, SECTION_COLORS[i % SECTION_COLORS.length]);
+  for (let i = 2; i < sections.length; i++) {
+    createFrameWithNotes(
+      editor, sections[i], { x: topXPositions[i - 2], y: bottomRowY },
+      frameW, bottomRowH, SECTION_COLORS[i % SECTION_COLORS.length],
+    );
   }
 }
 
@@ -522,16 +530,22 @@ function createFrameWithNotes(
 ): string {
   const frameId = createShapeId();
 
+  // Create frame with generous initial height so notes aren't clipped during creation.
+  // We'll measure actual note bounds and shrink-to-fit afterwards.
+  const generousH = Math.max(frameH, section.items.length * (NOTE_H + NOTE_GAP) * 2);
+
   editor.createShape({
     id: frameId,
     type: 'frame',
     x: pos.x,
     y: pos.y,
-    props: { w: frameW, h: frameH, name: section.sectionTitle },
+    props: { w: frameW, h: generousH, name: section.sectionTitle },
   });
 
+  const noteIds: ReturnType<typeof createShapeId>[] = [];
   for (let i = 0; i < section.items.length; i++) {
     const noteId = createShapeId();
+    noteIds.push(noteId);
     editor.createShape({
       id: noteId,
       type: 'note',
@@ -543,6 +557,33 @@ function createFrameWithNotes(
         color: noteColor,
       },
     } as Parameters<typeof editor.createShape>[0]);
+  }
+
+  // Measure actual note bounds (accounts for growY from text wrapping)
+  // and resize frame to fit all children snugly.
+  if (noteIds.length > 0) {
+    const frameBounds = editor.getShapePageBounds(frameId);
+    const childBounds = noteIds
+      .map((nid) => editor.getShapePageBounds(nid))
+      .filter(Boolean);
+
+    if (childBounds.length > 0 && frameBounds) {
+      const lastChildMaxY = Math.max(...childBounds.map((b) => b!.maxY));
+      const fittedH = (lastChildMaxY - frameBounds.y) + FRAME_BOTTOM_PADDING;
+      const finalH = Math.max(fittedH, MIN_FRAME_HEIGHT);
+      editor.updateShape({
+        id: frameId,
+        type: 'frame',
+        props: { h: finalH },
+      });
+    }
+  } else {
+    // No notes — use the originally calculated height
+    editor.updateShape({
+      id: frameId,
+      type: 'frame',
+      props: { h: frameH },
+    });
   }
 
   return frameId;

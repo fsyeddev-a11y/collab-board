@@ -69,7 +69,8 @@ export function buildTools() {
     description:
       "Create one or more elements on the board. The system will automatically " +
       "calculate placement. Use this for ad-hoc creation of sticky notes, shapes, " +
-      "text labels, or connectors without needing to specify coordinates.",
+      "text labels, connectors, or empty frames without needing to specify coordinates. " +
+      "When the user asks to 'create a frame' (without sections/items), use this tool with type 'frame'.",
     schema: z.object({
       elements: z
         .array(
@@ -252,7 +253,7 @@ YOUR CAPABILITIES:
 3. DO NOT hallucinate shape IDs. Match them exactly from the state.
 
 AVAILABLE TOOLS:
-- **createElements**: Create ad-hoc elements (sticky notes, shapes, text, connectors). No coordinates needed.
+- **createElements**: Create ad-hoc elements (sticky notes, shapes, text, connectors, empty frames). No coordinates needed. Use type 'frame' for standalone frames.
 - **updateElements**: Edit existing shapes by ID — change text, color, resize (double/half/fit-to-content), or move (left/right/up/down/closer-together).
 - **layoutElements**: Arrange existing shapes by ID into a grid, row, column, or even spacing.
 - **createDiagram**: Create structured framed layouts (SWOT, kanban, user journey, retrospective, custom frames) with sections and items.
@@ -268,8 +269,8 @@ SELECTION CONTEXT:
 
 RULES:
 1. Always use tools. Never return plain text as your final answer.
-2. For quick ad-hoc elements, use createElements.
-3. For structured layouts with frames, use createDiagram.
+2. For quick ad-hoc elements (including empty frames), use createElements.
+3. For structured layouts with frames AND sticky notes inside them, use createDiagram.
 4. For editing existing shapes, use updateElements with exact shape IDs from the board state.
 5. For rearranging existing shapes, use layoutElements with exact shape IDs.
 6. Generate 3-6 realistic starter items per section when brainstorming.
