@@ -1,11 +1,11 @@
-import { ChatOpenAI } from '@langchain/openai';
-import { AgentExecutor, createToolCallingAgent } from 'langchain/agents';
+import { ChatOpenAI } from "@langchain/openai";
+import { AgentExecutor, createToolCallingAgent } from "langchain/agents";
 import {
   ChatPromptTemplate,
   MessagesPlaceholder,
-} from '@langchain/core/prompts';
-import { DynamicStructuredTool } from '@langchain/core/tools';
-import { z } from 'zod';
+} from "@langchain/core/prompts";
+import { DynamicStructuredTool } from "@langchain/core/tools";
+import { z } from "zod";
 
 // ── OpenRouter LLM (singleton) ────────────────────────────────────────────────
 //
@@ -22,13 +22,13 @@ function getLLM(): ChatOpenAI {
   if (!_llm) {
     _llm = new ChatOpenAI({
       openAIApiKey: process.env.OPENROUTER_API_KEY,
-      modelName: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
+      modelName: process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
       temperature: 0.2,
       configuration: {
-        baseURL: 'https://openrouter.ai/api/v1',
+        baseURL: "https://openrouter.ai/api/v1",
         defaultHeaders: {
-          'HTTP-Referer': 'https://collabboard.pages.dev',
-          'X-Title': 'CollabBoard AI Agent',
+          "HTTP-Referer": "https://collabboard.pages.dev",
+          "X-Title": "CollabBoard AI Agent",
         },
       },
     });
@@ -39,18 +39,18 @@ function getLLM(): ChatOpenAI {
 // ── Tool colour palette (matches tldraw) ──────────────────────────────────────
 
 const TL_COLORS = [
-  'yellow',
-  'green',
-  'blue',
-  'orange',
-  'red',
-  'violet',
-  'light-blue',
-  'light-green',
-  'light-red',
-  'light-violet',
-  'grey',
-  'white',
+  "yellow",
+  "green",
+  "blue",
+  "orange",
+  "red",
+  "violet",
+  "light-blue",
+  "light-green",
+  "light-red",
+  "light-violet",
+  "grey",
+  "white",
 ] as const;
 
 const TLColorEnum = z.enum(TL_COLORS);
@@ -65,98 +65,119 @@ const TLColorEnum = z.enum(TL_COLORS);
 
 function buildTools() {
   const createElements = new DynamicStructuredTool({
-    name: 'createElements',
+    name: "createElements",
     description:
-      'Create one or more elements on the board. The system will automatically ' +
-      'calculate placement. Use this for ad-hoc creation of sticky notes, shapes, ' +
-      'text labels, or connectors without needing to specify coordinates.',
+      "Create one or more elements on the board. The system will automatically " +
+      "calculate placement. Use this for ad-hoc creation of sticky notes, shapes, " +
+      "text labels, or connectors without needing to specify coordinates.",
     schema: z.object({
       elements: z
         .array(
           z.object({
             type: z
-              .enum(['sticky', 'shape', 'text', 'connector'])
+              .enum(["sticky", "shape", "text", "connector"])
               .describe(
-                'sticky: a sticky note; shape: a geometric shape (rectangle); ' +
-                'text: a text label; connector: an arrow/line',
+                "sticky: a sticky note; shape: a geometric shape (rectangle); " +
+                  "text: a text label; connector: an arrow/line",
               ),
-            color: TLColorEnum.optional().describe('tldraw colour, or omit for default'),
-            text: z.string().optional().describe('Text content for the element'),
+            color: TLColorEnum.optional().describe(
+              "tldraw colour, or omit for default",
+            ),
+            text: z
+              .string()
+              .optional()
+              .describe("Text content for the element"),
           }),
         )
         .min(1)
         .max(30),
     }),
     func: async (input) => {
-      const result = { tool: 'createElements' as const, ...input };
+      const result = { tool: "createElements" as const, ...input };
       return JSON.stringify({
-        _observation: `Planned ${input.elements.length} element(s): ${input.elements.map((e) => e.type).join(', ')}. The frontend will handle placement.`,
+        _observation: `Planned ${input.elements.length} element(s): ${input.elements.map((e) => e.type).join(", ")}. The frontend will handle placement.`,
         ...result,
       });
     },
   });
 
   const updateElements = new DynamicStructuredTool({
-    name: 'updateElements',
+    name: "updateElements",
     description:
-      'Batch-edit existing shapes on the board. Find shape IDs from the ' +
-      'CURRENT BOARD STATE in the system prompt. Each update targets a shape ' +
-      'by its exact ID and can change text, color, size, or position using ' +
-      'semantic instructions (no pixel values needed).',
+      "Batch-edit existing shapes on the board. Find shape IDs from the " +
+      "CURRENT BOARD STATE in the system prompt. Each update targets a shape " +
+      "by its exact ID and can change text, color, size, or position using " +
+      "semantic instructions (no pixel values needed).",
     schema: z.object({
       updates: z
         .array(
           z.object({
-            shapeId: z.string().describe('The exact tldraw shape ID from the board state'),
-            newText: z.preprocess(
-              (v) => (v === '' ? undefined : v),
-              z.string().optional(),
-            ).describe('New text content for the shape, or omit to leave unchanged'),
-            newColor: z.preprocess(
-              (v) => (v === '' ? undefined : v),
-              TLColorEnum.optional(),
-            ).describe('New tldraw colour, or omit to leave unchanged'),
-            resizeInstruction: z.preprocess(
-              (v) => (v === '' ? undefined : v),
-              z.enum(['double', 'half', 'fit-to-content']).optional(),
-            ).describe('How to resize: double, half, or fit-to-content. Omit to leave unchanged'),
-            moveInstruction: z.preprocess(
-              (v) => (v === '' ? undefined : v),
-              z.enum(['left', 'right', 'up', 'down', 'closer-together']).optional(),
-            ).describe('Direction to move the shape. Omit to leave unchanged'),
+            shapeId: z
+              .string()
+              .describe("The exact tldraw shape ID from the board state"),
+            newText: z
+              .preprocess(
+                (v) => (v === "" ? undefined : v),
+                z.string().optional(),
+              )
+              .describe(
+                "New text content for the shape, or omit to leave unchanged",
+              ),
+            newColor: z
+              .preprocess(
+                (v) => (v === "" ? undefined : v),
+                TLColorEnum.optional(),
+              )
+              .describe("New tldraw colour, or omit to leave unchanged"),
+            resizeInstruction: z
+              .preprocess(
+                (v) => (v === "" ? undefined : v),
+                z.enum(["double", "half", "fit-to-content"]).optional(),
+              )
+              .describe(
+                "How to resize: double, half, or fit-to-content. Omit to leave unchanged",
+              ),
+            moveInstruction: z
+              .preprocess(
+                (v) => (v === "" ? undefined : v),
+                z
+                  .enum(["left", "right", "up", "down", "closer-together"])
+                  .optional(),
+              )
+              .describe("Direction to move the shape. Omit to leave unchanged"),
           }),
         )
         .min(1),
     }),
     func: async (input) => {
-      const result = { tool: 'updateElements' as const, ...input };
+      const result = { tool: "updateElements" as const, ...input };
       return JSON.stringify({
-        _observation: `Planned ${input.updates.length} element update(s): ${input.updates.map((u) => u.shapeId).join(', ')}.`,
+        _observation: `Planned ${input.updates.length} element update(s): ${input.updates.map((u) => u.shapeId).join(", ")}.`,
         ...result,
       });
     },
   });
 
   const layoutElements = new DynamicStructuredTool({
-    name: 'layoutElements',
+    name: "layoutElements",
     description:
-      'Arrange existing shapes into a layout pattern. Find shape IDs from the ' +
-      'CURRENT BOARD STATE. The system will reposition the shapes into the ' +
-      'requested layout automatically.',
+      "Arrange existing shapes into a layout pattern. Find shape IDs from the " +
+      "CURRENT BOARD STATE. The system will reposition the shapes into the " +
+      "requested layout automatically.",
     schema: z.object({
       shapeIds: z
         .array(z.string())
         .min(2)
-        .describe('The exact tldraw shape IDs to arrange'),
+        .describe("The exact tldraw shape IDs to arrange"),
       layoutType: z
-        .enum(['grid', 'horizontal-row', 'vertical-column', 'even-spacing'])
+        .enum(["grid", "horizontal-row", "vertical-column", "even-spacing"])
         .describe(
-          'grid: arrange in rows/cols; horizontal-row: single row left-to-right; ' +
-          'vertical-column: single column top-to-bottom; even-spacing: spread evenly',
+          "grid: arrange in rows/cols; horizontal-row: single row left-to-right; " +
+            "vertical-column: single column top-to-bottom; even-spacing: spread evenly",
         ),
     }),
     func: async (input) => {
-      const result = { tool: 'layoutElements' as const, ...input };
+      const result = { tool: "layoutElements" as const, ...input };
       return JSON.stringify({
         _observation: `Planned ${input.layoutType} layout for ${input.shapeIds.length} shapes.`,
         ...result,
@@ -165,39 +186,48 @@ function buildTools() {
   });
 
   const createDiagram = new DynamicStructuredTool({
-    name: 'createDiagram',
+    name: "createDiagram",
     description:
-      'Create a structured diagram with frames and sticky notes. The system ' +
-      'will automatically calculate all coordinates, frame sizes, and element ' +
-      'placement. You only need to provide the content structure. Use this for ' +
-      'SWOT analyses, kanban boards, user journeys, retrospectives, or any ' +
-      'custom framed layout.',
+      "Create a structured diagram with frames and sticky notes. The system " +
+      "will automatically calculate all coordinates, frame sizes, and element " +
+      "placement. You only need to provide the content structure. Use this for " +
+      "SWOT analyses, kanban boards, user journeys, retrospectives, or any " +
+      "custom framed layout.",
     schema: z.object({
       diagramType: z
-        .enum(['swot', 'kanban', 'user_journey', 'retrospective', 'custom_frame'])
+        .enum([
+          "swot",
+          "kanban",
+          "user_journey",
+          "retrospective",
+          "custom_frame",
+        ])
         .describe(
-          'swot: 2x2 grid (Strengths, Weaknesses, Opportunities, Threats); ' +
-          'kanban: horizontal columns (e.g. To Do, In Progress, Done); ' +
-          'user_journey: horizontal flow of stages with touchpoints; ' +
-          'retrospective: columns for What Went Well, What Didn\'t, Action Items; ' +
-          'custom_frame: flexible columns for any other framed layout',
+          "swot: 2x2 grid (Strengths, Weaknesses, Opportunities, Threats); " +
+            "kanban: horizontal columns (e.g. To Do, In Progress, Done); " +
+            "user_journey: horizontal flow of stages with touchpoints; " +
+            "retrospective: columns for What Went Well, What Didn't, Action Items; " +
+            "custom_frame: flexible columns for any other framed layout",
         ),
-      title: z.string().describe('The title of the overall diagram'),
+      title: z.string().describe("The title of the overall diagram"),
       sections: z
         .array(
           z.object({
-            sectionTitle: z.string().describe('Header for this section/column'),
+            sectionTitle: z.string().describe("Header for this section/column"),
             items: z
               .array(z.string())
-              .describe('Sticky note contents for this section'),
+              .describe("Sticky note contents for this section"),
           }),
         )
         .min(1)
         .max(10),
     }),
     func: async (input) => {
-      const result = { tool: 'createDiagram' as const, ...input };
-      const totalItems = input.sections.reduce((sum, s) => sum + s.items.length, 0);
+      const result = { tool: "createDiagram" as const, ...input };
+      const totalItems = input.sections.reduce(
+        (sum, s) => sum + s.items.length,
+        0,
+      );
       return JSON.stringify({
         _observation: `Planned ${input.diagramType} diagram "${input.title}" with ${input.sections.length} sections and ${totalItems} items. The frontend will handle all layout geometry.`,
         ...result,
@@ -254,9 +284,9 @@ export async function runAgent(
   const llm = getLLM();
 
   const prompt = ChatPromptTemplate.fromMessages([
-    ['system', SYSTEM_PROMPT],
-    ['human', '{input}'],
-    new MessagesPlaceholder('agent_scratchpad'),
+    ["system", SYSTEM_PROMPT],
+    ["human", "{input}"],
+    new MessagesPlaceholder("agent_scratchpad"),
   ]);
 
   const boundLlm = llm.bind({ parallel_tool_calls: false });
@@ -287,7 +317,7 @@ export async function runAgent(
       toolCalls.push(call as AgentToolCall);
     } catch {
       console.warn(
-        '[agent] Skipping unparseable tool observation:',
+        "[agent] Skipping unparseable tool observation:",
         step.observation,
       );
     }
