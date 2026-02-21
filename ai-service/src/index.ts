@@ -68,7 +68,7 @@ app.post(
 
       const response = AIServiceResponseSchema.parse({
         toolCalls,
-        modelUsed: process.env.OPENROUTER_MODEL || 'openai/gpt-oss-120b:free',
+        modelUsed: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
       });
 
       return c.json(response);

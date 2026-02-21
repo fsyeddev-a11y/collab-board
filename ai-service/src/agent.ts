@@ -22,7 +22,7 @@ function getLLM(): ChatOpenAI {
   if (!_llm) {
     _llm = new ChatOpenAI({
       openAIApiKey: process.env.OPENROUTER_API_KEY,
-      modelName: process.env.OPENROUTER_MODEL || 'openai/gpt-oss-120b:free',
+      modelName: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
       temperature: 0.2,
       configuration: {
         baseURL: 'https://openrouter.ai/api/v1',
