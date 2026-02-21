@@ -19,6 +19,12 @@ if (!process.env.OPENROUTER_API_KEY) {
   process.exit(1);
 }
 
+console.log('[ai-service] LangSmith config:', {
+  LANGCHAIN_TRACING_V2: process.env.LANGCHAIN_TRACING_V2 ?? '(not set)',
+  LANGCHAIN_API_KEY: process.env.LANGCHAIN_API_KEY ? '***set***' : '(not set)',
+  LANGCHAIN_PROJECT: process.env.LANGCHAIN_PROJECT ?? '(not set)',
+});
+
 // ── Hono app ──────────────────────────────────────────────────────────────────
 
 const app = new Hono();
