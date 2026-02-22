@@ -28,6 +28,14 @@ import { removeFrameKeepContents, deleteFrameWithContents } from '../utils/frame
 import { resolveToolCalls } from '../utils/aiResolver';
 import 'tldraw/tldraw.css';
 
+// ── Force minimap expanded by default ─────────────────────────────────────────
+// tldraw's DefaultNavigationPanel uses useLocalStorageState('minimap', true)
+// where true = collapsed. Pre-seed the key so first-time users see the minimap
+// open. Runs once at module load, before any React render.
+if (localStorage.getItem('minimap') === null) {
+  localStorage.setItem('minimap', JSON.stringify(false));
+}
+
 // ── Custom context menu ───────────────────────────────────────────────────────
 // Defined at module level (outside BoardPage) so tldraw never sees it as a
 // new component type on re-render, which would cause a context menu remount.
