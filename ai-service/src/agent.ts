@@ -314,6 +314,14 @@ MULTI-STEP COMMANDS:
 - MINIMIZE the number of agent iterations — each round-trip adds latency.
 
 CURRENT BOARD STATE:
+
+BOARD STATE FORMAT:
+- Shapes with a 'props' field are in the user's current viewport (full detail).
+- Shapes with only id, type, parentId, and text are off-screen (compact summary).
+- You can reference ANY shape by ID for updateElements or layoutElements, whether viewport or off-screen.
+- When creating new elements, they will be placed in the user's viewport automatically.
+- If the user asks about a specific off-screen shape, you can still edit it by ID — you just won't see its visual properties.
+
 {boardState}`;
 
 // ── Public interface ──────────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ import { shouldSendCursor, CURSOR_THROTTLE_MS } from '../utils/cursorThrottle';
 import { patchNoteCloneHandle } from '../utils/noteArrowOverride';
 import { removeFrameKeepContents, deleteFrameWithContents } from '../utils/frameActions';
 import { resolveToolCalls } from '../utils/aiResolver';
+import { buildTieredBoardState } from '../utils/boardStateBuilder';
 import 'tldraw/tldraw.css';
 
 // ── Force minimap expanded by default ─────────────────────────────────────────
@@ -170,17 +171,9 @@ export function BoardPage() {
       const token = await getToken({ skipCache: true });
       if (!token) { setAiError('Not authenticated'); return; }
 
-      // Gather current board shapes as context for the agent.
-      const selectedIds = new Set(editorRef.current.getSelectedShapeIds());
-      const shapes = editorRef.current.getCurrentPageShapes().map((s) => ({
-        id: s.id,
-        type: s.type,
-        x: s.x,
-        y: s.y,
-        parentId: s.parentId,
-        isSelected: selectedIds.has(s.id),
-        props: (s as unknown as Record<string, unknown>).props,
-      }));
+      // Build tiered board state: viewport shapes get full detail,
+      // off-screen shapes get compact summary (id/type/parentId/text only).
+      const shapes = buildTieredBoardState(editorRef.current);
 
       const res = await fetch(`${API_URL}/api/generate`, {
         method: 'POST',

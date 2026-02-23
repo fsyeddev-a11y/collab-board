@@ -221,6 +221,63 @@ The AI service receives `boardState` as `z.array(z.record(z.unknown())).optional
 - Shapes with no text (arrows without labels, empty geo shapes) should still appear in the off-screen index with `text: ""`.
 - Do NOT send x, y coordinates for any shapes (viewport or off-screen).
 
+## Testing Requirements
+
+### Automated Tests (new file: `frontend/src/tests/viewportWindowing.test.ts`)
+
+Write tests using the existing test patterns (Vitest, happy-dom environment). You will need to mock `editor.getViewportPageBounds()` and `editor.getShapePageBounds()` to simulate different viewport/shape positions.
+
+Create a helper function `buildTieredBoardState(editor)` that is extracted from handleAiGenerate() so it can be tested in isolation. Export it from a utility file (e.g., `frontend/src/utils/boardStateBuilder.ts`) and call it from handleAiGenerate().
+
+**Required test cases:**
+
+1. **All shapes in viewport**: Every shape intersects the viewport → all shapes have `props` field, none are compact.
+
+2. **Mixed viewport**: 3 shapes in viewport, 2 off-screen → viewport shapes have `props`, off-screen shapes have only `id, type, parentId, text`.
+
+3. **No coordinates on any shape**: Output should never contain `x` or `y` fields on any shape (viewport or off-screen).
+
+4. **Frame in viewport promotes children**: A frame inside the viewport with child notes outside the viewport → frame AND all children have full `props`.
+
+5. **Child in viewport promotes parent frame**: A child note inside the viewport but its parent frame is off-screen → parent frame gets promoted to full detail with `props`.
+
+6. **Empty text handling**: Arrow with no label (`props.text === ""`), geo with no text → both appear in off-screen index with `text: ""` (not omitted, not undefined).
+
+7. **10% padding inclusion**: Shape with bounds just outside the raw viewport but within the 10% expanded bounds → treated as viewport shape (has `props`).
+
+8. **Beyond padding exclusion**: Shape well outside the 10% padded viewport → compact format (no `props`).
+
+9. **Empty board**: 0 shapes → returns empty array, no errors.
+
+10. **All shapes off-screen**: Viewport positioned in empty area, all shapes far away → all shapes are compact format. Function does not crash.
+
+11. **Nested frames**: Frame inside a frame, outer frame in viewport → inner frame and all its children get full detail.
+
+12. **Shape exactly on viewport boundary**: Shape whose edge touches the viewport boundary (maxX === expandedBounds.minX) → should be included (AABB overlap, not strict containment).
+
+13. **Text extraction per type**: Verify correct text field extraction:
+    - note → `props.text`
+    - frame → `props.name`
+    - geo → `props.text`
+    - text shape → `props.text`
+    - arrow → `props.text`
+
+### Regression Tests
+
+14. **Existing tests unbroken**: All 90 existing tests still pass after changes.
+
+15. **F2 camera animation still works**: The `resolveToolCalls()` return value (affected shape IDs) is unaffected by board state changes.
+
+### Manual Verification Steps
+
+After automated tests pass, verify manually:
+
+1. **Network inspection**: Open DevTools Network tab → send an AI prompt → inspect the POST /api/generate request body → confirm viewport shapes have `props`, off-screen shapes have only `id/type/parentId/text`, no shapes have `x/y`.
+
+2. **Off-screen edit**: Create a SWOT diagram → pan far away → ask AI "Change the Strengths frame to blue" → verify it works (AI finds the frame by ID from compact index).
+
+3. **Token reduction log**: Add a temporary `console.log` showing `Viewport: ${viewportCount} shapes (full), Off-screen: ${offScreenCount} shapes (compact), Total chars: ${JSON.stringify(boardState).length}` — verify significant reduction when zoomed in on a large board. Remove the log before reporting completion.
+
 ## Acceptance Criteria
 
 - Board state sent to AI includes full props only for shapes in/near the viewport
@@ -230,6 +287,9 @@ The AI service receives `boardState` as `z.array(z.record(z.unknown())).optional
 - LLM can still edit off-screen shapes by ID (updateElements works on shapes not in viewport)
 - No regressions in AI generation quality for visible shapes
 - System prompt explains the tiered format
+- All 13+ new tests pass
+- All 90 existing tests pass unchanged
+- buildTieredBoardState() is extracted into a testable utility function
 
 ---
 
