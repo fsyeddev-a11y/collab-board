@@ -198,9 +198,34 @@ export function BoardPage() {
 
       const data = await res.json() as { toolCalls: unknown[] };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      resolveToolCalls(editorRef.current, data.toolCalls as any);
+      const affectedIds = resolveToolCalls(editorRef.current, data.toolCalls as any);
       setAiPrompt('');
-      setAiPanelOpen(false);
+
+      // Animate camera to show affected shapes
+      const editor = editorRef.current;
+      const validBounds = affectedIds
+        .map(id => editor.getShapePageBounds(id as Parameters<typeof editor.getShapePageBounds>[0]))
+        .filter(Boolean);
+
+      if (validBounds.length >= 2) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const b of validBounds) {
+          minX = Math.min(minX, b!.minX);
+          minY = Math.min(minY, b!.minY);
+          maxX = Math.max(maxX, b!.maxX);
+          maxY = Math.max(maxY, b!.maxY);
+        }
+        editor.zoomToBounds(
+          { x: minX, y: minY, w: maxX - minX, h: maxY - minY },
+          { animation: { duration: 500 }, inset: 150 },
+        );
+      } else if (validBounds.length === 1) {
+        const b = validBounds[0]!;
+        editor.centerOnPoint(
+          { x: b.midX, y: b.midY },
+          { animation: { duration: 500 } },
+        );
+      }
     } catch (err) {
       console.error('[AI] Generation failed:', err);
       setAiError(err instanceof Error ? err.message : 'Generation failed');

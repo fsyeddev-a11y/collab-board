@@ -85,32 +85,42 @@ function calcFrameHeight(itemCount: number): number {
 
 // ── Main resolver ─────────────────────────────────────────────────────────────
 
-export function resolveToolCalls(editor: Editor, toolCalls: ToolCall[]): void {
-  const createdFrameIds: string[] = [];
+export function resolveToolCalls(editor: Editor, toolCalls: ToolCall[]): string[] {
+  const allIds: string[] = [];
+  const diagramFrameIds: string[] = [];
 
   editor.batch(() => {
     for (const call of toolCalls) {
       switch (call.tool) {
         case 'createElements':
-          resolveCreateElements(editor, call);
+          allIds.push(...resolveCreateElements(editor, call));
           break;
         case 'updateElements':
-          resolveUpdateElements(editor, call);
+          allIds.push(...resolveUpdateElements(editor, call));
           break;
         case 'layoutElements':
-          resolveLayoutElements(editor, call);
+          allIds.push(...resolveLayoutElements(editor, call));
           break;
-        case 'createDiagram':
-          createdFrameIds.push(...resolveCreateDiagram(editor, call));
+        case 'createDiagram': {
+          const ids = resolveCreateDiagram(editor, call);
+          allIds.push(...ids);
+          // Extract frame IDs for post-batch fitting
+          for (const id of ids) {
+            const shape = editor.getShape(id as ReturnType<typeof createShapeId>);
+            if (shape?.type === 'frame') diagramFrameIds.push(id);
+          }
           break;
+        }
       }
     }
   });
 
   // Post-batch: bounds are now accurate. Resize frames to fit their children.
-  if (createdFrameIds.length > 0) {
-    fitFramesToChildren(editor, createdFrameIds);
+  if (diagramFrameIds.length > 0) {
+    fitFramesToChildren(editor, diagramFrameIds);
   }
+
+  return allIds;
 }
 
 // ── Frame fit-to-children helper ─────────────────────────────────────────────
@@ -200,8 +210,9 @@ function findStartPosition(editor: Editor): { x: number; y: number } {
 
 // ── 1. createElements resolver ──────────────────────────────────────────────
 
-function resolveCreateElements(editor: Editor, call: CreateElementsCall): void {
+function resolveCreateElements(editor: Editor, call: CreateElementsCall): string[] {
   const start = findStartPosition(editor);
+  const createdIds: string[] = [];
 
   // Place elements in a horizontal row
   for (let i = 0; i < call.elements.length; i++) {
@@ -209,6 +220,7 @@ function resolveCreateElements(editor: Editor, call: CreateElementsCall): void {
     const x = start.x + i * (NOTE_W + NOTE_GAP);
     const y = start.y;
     const id = createShapeId();
+    createdIds.push(id);
 
     switch (el.type) {
       case 'sticky':
@@ -284,11 +296,15 @@ function resolveCreateElements(editor: Editor, call: CreateElementsCall): void {
         break;
     }
   }
+
+  return createdIds;
 }
 
 // ── 2. updateElements resolver ──────────────────────────────────────────────
 
-function resolveUpdateElements(editor: Editor, call: UpdateElementsCall): void {
+function resolveUpdateElements(editor: Editor, call: UpdateElementsCall): string[] {
+  const updatedIds: string[] = [];
+
   for (const update of call.updates) {
     const shapeId = update.shapeId as ReturnType<typeof createShapeId>;
     const shape = editor.getShape(shapeId);
@@ -297,6 +313,8 @@ function resolveUpdateElements(editor: Editor, call: UpdateElementsCall): void {
       console.warn('[aiResolver] Skipping update — shape not found:', update.shapeId);
       continue;
     }
+
+    updatedIds.push(update.shapeId);
 
     // Apply text/color/name changes
     const props: Record<string, unknown> = {};
@@ -372,18 +390,20 @@ function resolveUpdateElements(editor: Editor, call: UpdateElementsCall): void {
       editor.nudgeShapes([entry.id], { x: dx, y: dy });
     }
   }
+
+  return updatedIds;
 }
 
 // ── 3. layoutElements resolver ──────────────────────────────────────────────
 
-function resolveLayoutElements(editor: Editor, call: LayoutElementsCall): void {
+function resolveLayoutElements(editor: Editor, call: LayoutElementsCall): string[] {
   const validIds = call.shapeIds
     .map((id) => id as ReturnType<typeof createShapeId>)
     .filter((id) => editor.getShape(id));
 
   if (validIds.length < 2) {
     console.warn('[aiResolver] layoutElements needs at least 2 valid shapes');
-    return;
+    return [];
   }
 
   // Get current bounds to find a starting position
@@ -451,6 +471,8 @@ function resolveLayoutElements(editor: Editor, call: LayoutElementsCall): void {
       break;
     }
   }
+
+  return validIds as string[];
 }
 
 // ── 4. createDiagram resolver ───────────────────────────────────────────────
@@ -476,7 +498,7 @@ function layoutSwot(editor: Editor, call: CreateDiagramCall): string[] {
   const start = findStartPosition(editor);
   const adjustedStartY = start.y + FRAME_LABEL_HEIGHT; // room for first row's label
   const sections = call.sections.slice(0, 4);
-  const allFrameIds: string[] = [];
+  const allIds: string[] = [];
 
   const frameW = NOTE_W + NOTE_PADDING * 2;
 
@@ -488,11 +510,11 @@ function layoutSwot(editor: Editor, call: CreateDiagramCall): string[] {
   // Create top row
   const topXPositions = [start.x, start.x + frameW + FRAME_GAP];
   for (let i = 0; i < Math.min(sections.length, 2); i++) {
-    const fid = createFrameWithNotes(
+    const ids = createFrameWithNotes(
       editor, sections[i], { x: topXPositions[i], y: adjustedStartY },
       frameW, topRowH, SECTION_COLORS[i % SECTION_COLORS.length],
     );
-    allFrameIds.push(fid);
+    allIds.push(...ids);
   }
 
   // Position bottom row using deterministic calculated height
@@ -504,14 +526,14 @@ function layoutSwot(editor: Editor, call: CreateDiagramCall): string[] {
   );
 
   for (let i = 2; i < sections.length; i++) {
-    const fid = createFrameWithNotes(
+    const ids = createFrameWithNotes(
       editor, sections[i], { x: topXPositions[i - 2], y: bottomRowY },
       frameW, bottomRowH, SECTION_COLORS[i % SECTION_COLORS.length],
     );
-    allFrameIds.push(fid);
+    allIds.push(...ids);
   }
 
-  return allFrameIds;
+  return allIds;
 }
 
 // ── Columns: kanban, retrospective, custom_frame ─────────────────────────────
@@ -520,19 +542,19 @@ function layoutColumns(editor: Editor, call: CreateDiagramCall): string[] {
   const start = findStartPosition(editor);
   const adjustedStartY = start.y + FRAME_LABEL_HEIGHT; // room for frame labels
   const frameW = NOTE_W + NOTE_PADDING * 2;
-  const allFrameIds: string[] = [];
+  const allIds: string[] = [];
   let curX = start.x;
 
   for (let i = 0; i < call.sections.length; i++) {
     const section = call.sections[i];
     const frameH = calcFrameHeight(section.items.length);
 
-    const fid = createFrameWithNotes(editor, section, { x: curX, y: adjustedStartY }, frameW, frameH, SECTION_COLORS[i % SECTION_COLORS.length]);
-    allFrameIds.push(fid);
+    const ids = createFrameWithNotes(editor, section, { x: curX, y: adjustedStartY }, frameW, frameH, SECTION_COLORS[i % SECTION_COLORS.length]);
+    allIds.push(...ids);
     curX += frameW + FRAME_GAP;
   }
 
-  return allFrameIds;
+  return allIds;
 }
 
 // ── User Journey: horizontal flow with arrows ────────────────────────────────
@@ -541,6 +563,7 @@ function layoutUserJourney(editor: Editor, call: CreateDiagramCall): string[] {
   const start = findStartPosition(editor);
   const adjustedStartY = start.y + FRAME_LABEL_HEIGHT; // room for frame labels
   const frameW = NOTE_W + NOTE_PADDING * 2;
+  const allIds: string[] = [];
   const frameIds: string[] = [];
   let curX = start.x;
 
@@ -548,20 +571,21 @@ function layoutUserJourney(editor: Editor, call: CreateDiagramCall): string[] {
     const section = call.sections[i];
     const frameH = calcFrameHeight(section.items.length);
 
-    const frameId = createFrameWithNotes(
+    const ids = createFrameWithNotes(
       editor, section, { x: curX, y: adjustedStartY }, frameW, frameH,
       SECTION_COLORS[i % SECTION_COLORS.length],
     );
-    frameIds.push(frameId);
+    allIds.push(...ids);
+    frameIds.push(ids[0]); // first ID is the frame
     curX += frameW + FRAME_GAP + 20; // extra gap for arrows
   }
 
   // Connect stages with arrows
   for (let i = 0; i < frameIds.length - 1; i++) {
-    createArrowBetween(editor, frameIds[i], frameIds[i + 1]);
+    allIds.push(createArrowBetween(editor, frameIds[i], frameIds[i + 1]));
   }
 
-  return frameIds;
+  return allIds;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -573,8 +597,9 @@ function createFrameWithNotes(
   frameW: number,
   frameH: number,
   noteColor: string,
-): string {
+): string[] {
   const frameId = createShapeId();
+  const allIds: string[] = [frameId];
 
   // Use the pre-calculated frameH. Post-batch fitFramesToChildren() will
   // resize to actual content once tldraw has computed growY bounds.
@@ -588,6 +613,7 @@ function createFrameWithNotes(
 
   for (let i = 0; i < section.items.length; i++) {
     const noteId = createShapeId();
+    allIds.push(noteId);
     editor.createShape({
       id: noteId,
       type: 'note',
@@ -601,10 +627,10 @@ function createFrameWithNotes(
     } as Parameters<typeof editor.createShape>[0]);
   }
 
-  return frameId;
+  return allIds;
 }
 
-function createArrowBetween(editor: Editor, fromId: string, toId: string): void {
+function createArrowBetween(editor: Editor, fromId: string, toId: string): string {
   const arrowId = createShapeId();
 
   editor.createShape({
@@ -642,4 +668,6 @@ function createArrowBetween(editor: Editor, fromId: string, toId: string): void 
       isPrecise: false,
     },
   });
+
+  return arrowId;
 }

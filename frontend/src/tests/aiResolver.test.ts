@@ -748,3 +748,145 @@ describe('resolveToolCalls — multi-call dispatch', () => {
     expect(frames).toHaveLength(1);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. Affected shape IDs returned for camera animation (F2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('resolveToolCalls — returns affected shape IDs', () => {
+
+  it('returns created IDs from createElements', () => {
+    const ids = resolveToolCalls(editor, [{
+      tool: 'createElements',
+      elements: [
+        { type: 'sticky', text: 'A' },
+        { type: 'shape', text: 'B' },
+      ],
+    }]);
+
+    expect(ids).toHaveLength(2);
+    // Each returned ID should correspond to a shape on the page
+    for (const id of ids) {
+      expect(editor.getShape(id as TLShapeId)).toBeDefined();
+    }
+  });
+
+  it('returns updated IDs from updateElements', () => {
+    const id1 = createShapeId();
+    const id2 = createShapeId();
+    editor.createShape({ id: id1, type: 'note', x: 800, y: 800, props: { text: 'A' } });
+    editor.createShape({ id: id2, type: 'note', x: 900, y: 800, props: { text: 'B' } });
+
+    const ids = resolveToolCalls(editor, [{
+      tool: 'updateElements',
+      updates: [
+        { shapeId: id1 as string, newText: 'A2' },
+        { shapeId: id2 as string, newText: 'B2' },
+      ],
+    }]);
+
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain(id1 as string);
+    expect(ids).toContain(id2 as string);
+  });
+
+  it('returns empty array when updating non-existent shapes', () => {
+    const ids = resolveToolCalls(editor, [{
+      tool: 'updateElements',
+      updates: [{ shapeId: 'shape:nonexistent', newText: 'Nope' }],
+    }]);
+
+    expect(ids).toHaveLength(0);
+  });
+
+  it('returns rearranged IDs from layoutElements', () => {
+    const noteIds = [createShapeId(), createShapeId(), createShapeId()];
+    editor.createShape({ id: noteIds[0], type: 'note', x: 800, y: 800, props: { text: '1' } });
+    editor.createShape({ id: noteIds[1], type: 'note', x: 900, y: 900, props: { text: '2' } });
+    editor.createShape({ id: noteIds[2], type: 'note', x: 1000, y: 1000, props: { text: '3' } });
+
+    const ids = resolveToolCalls(editor, [{
+      tool: 'layoutElements',
+      shapeIds: noteIds as string[],
+      layoutType: 'horizontal-row',
+    }]);
+
+    expect(ids).toHaveLength(3);
+  });
+
+  it('returns empty array from layoutElements with fewer than 2 shapes', () => {
+    const id = createShapeId();
+    editor.createShape({ id, type: 'note', x: 800, y: 800, props: { text: '1' } });
+
+    const ids = resolveToolCalls(editor, [{
+      tool: 'layoutElements',
+      shapeIds: [id as string],
+      layoutType: 'grid',
+    }]);
+
+    expect(ids).toHaveLength(0);
+  });
+
+  it('returns all IDs (frames + notes) from createDiagram', () => {
+    const ids = resolveToolCalls(editor, [{
+      tool: 'createDiagram',
+      diagramType: 'kanban',
+      title: 'Board',
+      sections: [
+        { sectionTitle: 'Todo', items: ['Task 1', 'Task 2'] },
+        { sectionTitle: 'Done', items: ['Task 3'] },
+      ],
+    }]);
+
+    // 2 frames + 3 notes = 5 IDs total
+    expect(ids).toHaveLength(5);
+    const frames = shapesOfType(editor, 'frame');
+    const notes = shapesOfType(editor, 'note');
+    for (const f of frames) {
+      expect(ids).toContain(f.id as string);
+    }
+    for (const n of notes) {
+      expect(ids).toContain(n.id as string);
+    }
+  });
+
+  it('returns all IDs (frames + notes + arrows) from user journey', () => {
+    const ids = resolveToolCalls(editor, [{
+      tool: 'createDiagram',
+      diagramType: 'user_journey',
+      title: 'Flow',
+      sections: [
+        { sectionTitle: 'Step 1', items: ['Do A'] },
+        { sectionTitle: 'Step 2', items: ['Do B'] },
+        { sectionTitle: 'Step 3', items: ['Do C'] },
+      ],
+    }]);
+
+    // 3 frames + 3 notes + 2 arrows = 8 IDs
+    expect(ids).toHaveLength(8);
+    const arrows = shapesOfType(editor, 'arrow');
+    for (const a of arrows) {
+      expect(ids).toContain(a.id as string);
+    }
+  });
+
+  it('aggregates IDs across multiple tool calls', () => {
+    const ids = resolveToolCalls(editor, [
+      {
+        tool: 'createElements',
+        elements: [{ type: 'sticky', text: 'Standalone' }],
+      },
+      {
+        tool: 'createDiagram',
+        diagramType: 'kanban',
+        title: 'Board',
+        sections: [
+          { sectionTitle: 'Todo', items: ['Task'] },
+        ],
+      },
+    ]);
+
+    // 1 standalone note + 1 frame + 1 note = 3 IDs
+    expect(ids).toHaveLength(3);
+  });
+});
