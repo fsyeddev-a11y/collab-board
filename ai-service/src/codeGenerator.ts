@@ -23,6 +23,8 @@ A nested array of nodes. Each node:
 - sizeHint: { width: "narrow" | "medium" | "wide", height: "short" | "medium" | "tall" }
 - layoutType: "row" | "col" | "grid" (only on "frame" nodes — computed layout direction)
 - gridCols: number (only when layoutType is "grid" — number of columns)
+- elementHint: "button" | "input" (only on "geo" nodes — pre-computed element classification)
+- inputType: "text" | "email" | "password" | "search" | "tel" | "url" (only when elementHint is "input")
 - children: nested child nodes
 
 ### Connections
@@ -52,29 +54,27 @@ Translate to semantic HTML based on the label:
 Apply p-6 padding to all frame containers.
 
 ### "geo" → Interactive UI Elements
-**CORE CONVENTION: Every geo shape is an interactive element.** Users draw rectangles/ellipses for buttons, inputs, and links. They use frames for containers and the text tool for typography.
+**CORE CONVENTION: Every geo shape is an interactive element.** The frontend pre-computes the element type — strictly obey the elementHint and inputType fields. Do NOT guess.
 
-Determine the specific element using the label text:
-
-**Inputs** — render as <input> when label suggests data entry:
-- Keywords (case-insensitive): Enter, Email, Password, Search, Username, Name, Phone, Address, Type here
-- Use appropriate input type: label contains "email" → type="email", "password" → type="password", "search" → type="search", otherwise type="text"
+**When elementHint is "input"** → render as <input>:
+- Use the inputType field as the HTML type attribute (e.g. inputType: "email" → type="email")
 - Default styling: className="border border-gray-300 rounded-lg px-4 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-500"
 - Use the label as placeholder text
+
+**When elementHint is "button"** (or elementHint is absent) → render as <button>:
+- Use the label as button text
+- **Button size is determined by sizeHint — obey strictly:**
+  - sizeHint.width: "narrow" → small button: className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+  - sizeHint.width: "medium" → medium button: className="px-4 py-2 text-base bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+  - sizeHint.width: "wide" → large full-width button: className="px-6 py-3 text-lg w-full bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
 
 **Ellipse shapes** (geo: "ellipse"):
 - If label suggests avatar/profile → <div className="rounded-full bg-gray-200 w-10 h-10 flex items-center justify-center"> with emoji 👤
 - Otherwise → <div className="rounded-full"> styled as a decorative circle
 
-**Default — ALL other geo shapes → <button>:**
-- This is the fallback for ANY geo shape that does not match input or ellipse rules above
-- Includes navigation items (Home, About, Contact), actions (Submit, Save, Delete), and any other labeled rectangle
-- Default styling: className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-- Use the label as button text
+**Geo with empty label and no elementHint** → decorative placeholder: <div className="rounded-lg bg-gray-100 border border-gray-200"> with sizeHint-based dimensions
 
-**Geo with empty label** → decorative placeholder: <div className="rounded-lg bg-gray-100 border border-gray-200"> with sizeHint-based dimensions
-
-Size mapping from sizeHint:
+General sizeHint dimensions (for non-button geo elements):
 - width: narrow → w-48, medium → w-64, wide → w-full
 - height: short → h-12, medium → h-32, tall → h-64
 
@@ -109,7 +109,7 @@ For each connection:
 - Tailwind ONLY: Use standard Tailwind CSS utility classes exclusively
 - NO inline styles: Never use style={{...}}
 - Spacing: Use gap-6 between sibling elements, p-6 on containers. Never let elements touch without spacing
-- Icons: Do NOT import icon libraries. Use text emojis if contextually needed
+- Icons: Do NOT import icon libraries. Use text emojis if contextually needed (🔍 ⚙️ 👤 ➡️ 📧 🔒)
 - Colors: Use Tailwind default palette (slate, gray, blue, red, green, etc.)
 - Typography: Use font-sans (default). Headings get font-bold or font-semibold
 

@@ -546,3 +546,98 @@ describe('buildConnections', () => {
     expect(connections[0].label).toBe('');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Element hint classification
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('classifyGeoElement (via buildSpatialTree)', () => {
+
+  it('classifies "Username" as input with type text', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'Username' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('input');
+    expect(tree[0].inputType).toBe('text');
+  });
+
+  it('classifies "Email" as input with type email', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'Email' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('input');
+    expect(tree[0].inputType).toBe('email');
+  });
+
+  it('classifies "Password" as input with type password', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'Password' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('input');
+    expect(tree[0].inputType).toBe('password');
+  });
+
+  it('classifies "Search" as input with type search', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'Search' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('input');
+    expect(tree[0].inputType).toBe('search');
+  });
+
+  it('classifies "Phone" as input with type tel', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'Phone' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('input');
+    expect(tree[0].inputType).toBe('tel');
+  });
+
+  it('classifies "Submit" as button', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'Submit' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('button');
+    expect(tree[0].inputType).toBeUndefined();
+  });
+
+  it('classifies "Home" as button (nav item)', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 100, h: 40, geo: 'rectangle', text: 'Home' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('button');
+  });
+
+  it('classifies empty label as button', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 100, h: 40, geo: 'rectangle', text: '' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('button');
+  });
+
+  it('is case-insensitive', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'EMAIL ADDRESS' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('input');
+    expect(tree[0].inputType).toBe('email');
+  });
+
+  it('does not set elementHint on non-geo shapes', () => {
+    const textShape = createShapeId();
+    editor.createShape({ id: textShape, type: 'text', x: 800, y: 800, props: { text: 'Username' } });
+
+    const tree = buildSpatialTree(editor, [textShape]);
+    expect(tree[0].elementHint).toBeUndefined();
+    expect(tree[0].inputType).toBeUndefined();
+  });
+});

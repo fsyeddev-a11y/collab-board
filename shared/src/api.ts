@@ -245,6 +245,8 @@ export type SpatialNode = {
   };
   layoutType?: 'row' | 'col' | 'grid';
   gridCols?: number;
+  elementHint?: 'button' | 'input';
+  inputType?: 'text' | 'email' | 'password' | 'search' | 'tel' | 'url';
   children: SpatialNode[];
 };
 
@@ -260,6 +262,8 @@ export const SpatialNodeSchema: z.ZodType<SpatialNode> = z.lazy(() =>
     }),
     layoutType: z.enum(['row', 'col', 'grid']).optional(),
     gridCols: z.number().int().min(1).optional(),
+    elementHint: z.enum(['button', 'input']).optional(),
+    inputType: z.enum(['text', 'email', 'password', 'search', 'tel', 'url']).optional(),
     children: z.array(SpatialNodeSchema),
   }),
 );

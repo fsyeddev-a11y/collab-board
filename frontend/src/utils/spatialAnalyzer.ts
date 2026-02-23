@@ -71,6 +71,42 @@ function computeLayoutType(
   return { layoutType: 'col' };
 }
 
+/** Input keyword → HTML input type mapping. Case-insensitive match against label. */
+const INPUT_KEYWORDS: Array<{ keywords: string[]; inputType: SpatialNode['inputType'] }> = [
+  { keywords: ['email', 'e-mail'],                    inputType: 'email' },
+  { keywords: ['password', 'passwd'],                  inputType: 'password' },
+  { keywords: ['search', 'find', 'look up'],           inputType: 'search' },
+  { keywords: ['phone', 'tel', 'mobile', 'cell'],      inputType: 'tel' },
+  { keywords: ['url', 'website', 'link', 'web'],       inputType: 'url' },
+  // Generic text inputs — catch-all for data entry shapes
+  { keywords: [
+      'username', 'user name', 'name', 'first name', 'last name', 'full name',
+      'address', 'city', 'state', 'zip', 'country',
+      'enter', 'type', 'type here', 'input',
+      'message', 'comment', 'description', 'notes', 'bio',
+    ],                                                  inputType: 'text' },
+];
+
+/**
+ * Classify a geo shape as 'button' or 'input' based on its label.
+ * Returns elementHint and (for inputs) the HTML input type.
+ */
+function classifyGeoElement(label: string): {
+  elementHint: 'button' | 'input';
+  inputType?: SpatialNode['inputType'];
+} {
+  const lower = label.toLowerCase().trim();
+  if (!lower) return { elementHint: 'button' }; // empty label → button
+
+  for (const entry of INPUT_KEYWORDS) {
+    if (entry.keywords.some((kw) => lower === kw || lower.includes(kw))) {
+      return { elementHint: 'input', inputType: entry.inputType };
+    }
+  }
+
+  return { elementHint: 'button' };
+}
+
 interface ShapeEntry {
   id: TLShapeId;
   type: string;
@@ -205,6 +241,10 @@ export function buildSpatialTree(editor: Editor, shapeIds: TLShapeId[]): Spatial
       nodeType === 'frame' && entry.children.length > 0
         ? computeLayoutType(entry.children)
         : undefined;
+    const geoHint =
+      nodeType === 'geo'
+        ? classifyGeoElement(entry.label)
+        : undefined;
 
     return {
       shapeId: entry.id,
@@ -214,6 +254,8 @@ export function buildSpatialTree(editor: Editor, shapeIds: TLShapeId[]): Spatial
       sizeHint: { width: widthCategory(entry.bounds.w), height: heightCategory(entry.bounds.h) },
       ...(layout?.layoutType ? { layoutType: layout.layoutType } : {}),
       ...(layout?.gridCols ? { gridCols: layout.gridCols } : {}),
+      ...(geoHint ? { elementHint: geoHint.elementHint } : {}),
+      ...(geoHint?.inputType ? { inputType: geoHint.inputType } : {}),
       children: entry.children.map(toNode),
     };
   }
