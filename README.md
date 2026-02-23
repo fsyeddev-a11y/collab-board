@@ -1,170 +1,303 @@
 # CollabBoard: AI-First Multiplayer Whiteboard
 
-A high-performance, real-time collaborative whiteboard with AI-powered layout generation via a dedicated microservice.
+A real-time collaborative whiteboard where teams brainstorm visually and an AI agent manipulates the canvas through natural language. Draw a wireframe, hit "Generate Code," and get a live React + Tailwind preview.
 
-## Architecture (Split AI)
+---
 
-| Concern | Technology | Host |
-|---------|-----------|------|
-| Frontend SPA | React + Vite + tldraw + Clerk | Cloudflare Pages |
-| Auth / WebSockets / REST | Cloudflare Workers + Durable Objects + D1 | Cloudflare Edge |
-| AI Agent | Hono + LangChain + OpenRouter | Render (Docker) |
-| Shared Contracts | Zod schemas (`shared/`) | n/a |
+## Architecture Diagram
 
-The Cloudflare Worker stays lean: it handles WebSocket multiplayer sync, Clerk JWT verification, and board metadata via D1. It does **not** contain any LLM logic. When a user requests AI generation, the Worker verifies the JWT and forwards the sanitised payload to the Hono AI microservice over an internal authenticated HTTP call.
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                          BROWSER                                │
+│                                                                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │              React SPA (Vite + tldraw + Clerk)            │  │
+│  │                                                           │  │
+│  │  ┌────────────┐  ┌──────────────┐  ┌──────────────────┐  │  │
+│  │  │ BoardPage  │  │ AI Chat      │  │ Code Preview     │  │  │
+│  │  │ (tldraw    │  │ Panel        │  │ Panel (iframe    │  │  │
+│  │  │  canvas)   │  │              │  │  React+Tailwind) │  │  │
+│  │  └─────┬──────┘  └──────┬───────┘  └────────┬─────────┘  │  │
+│  │        │                │                    │            │  │
+│  │  ┌─────┴──────┐  ┌─────┴────────┐  ┌───────┴──────────┐ │  │
+│  │  │ WebSocket  │  │ boardState   │  │ spatialAnalyzer  │ │  │
+│  │  │ Sync       │  │ Builder      │  │ (geometric tree) │ │  │
+│  │  └─────┬──────┘  └─────┬────────┘  └───────┬──────────┘ │  │
+│  └────────┼───────────────┼────────────────────┼────────────┘  │
+└───────────┼───────────────┼────────────────────┼───────────────┘
+            │               │                    │
+       Clerk JWT       Clerk JWT            Clerk JWT
+            │               │                    │
+            ▼               ▼                    ▼
+┌───────────────────────────────────────────────────────────────┐
+│                  CLOUDFLARE EDGE                              │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │              CF Worker (src/index.ts)                    │  │
+│  │                                                         │  │
+│  │  ┌──────────┐  ┌────────────┐  ┌─────────────────────┐ │  │
+│  │  │ JWT Auth │  │ REST       │  │ AI Proxy            │ │  │
+│  │  │ (Clerk)  │  │ Routes     │  │ POST /api/generate  │ │  │
+│  │  │          │  │ (CRUD)     │  │ POST /api/gen-code  │ │  │
+│  │  └──────────┘  └─────┬──────┘  └──────────┬──────────┘ │  │
+│  │                      │                     │            │  │
+│  │                      ▼                     │            │  │
+│  │              ┌──────────────┐              │            │  │
+│  │              │ D1 Database  │              │            │  │
+│  │              │ (board meta, │              │            │  │
+│  │              │  guest ACL)  │              │            │  │
+│  │              └──────────────┘              │            │  │
+│  └────────────────────────────────────────────┼────────────┘  │
+│                                               │               │
+│  ┌──────────────────────────────────┐         │               │
+│  │ Durable Object: BoardRoom       │         │               │
+│  │ (one instance per board)        │         │               │
+│  │                                  │         │               │
+│  │  ┌───────────┐ ┌─────────────┐  │         │               │
+│  │  │ WebSocket │ │ Embedded    │  │         │               │
+│  │  │ Hub       │ │ SQLite      │  │         │               │
+│  │  │ (cursors, │ │ (canvas     │  │         │               │
+│  │  │  deltas)  │ │  state)     │  │         │               │
+│  │  └───────────┘ └─────────────┘  │         │               │
+│  └──────────────────────────────────┘         │               │
+└───────────────────────────────────────────────┼───────────────┘
+                                                │
+                                  HTTPS + X-Internal-Secret
+                                                │
+                                                ▼
+┌───────────────────────────────────────────────────────────────┐
+│                  RENDER (Docker)                               │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │          Hono AI Microservice (Node 22 Alpine)          │  │
+│  │                                                         │  │
+│  │  ┌─────────────────────┐  ┌──────────────────────────┐ │  │
+│  │  │ POST /generate      │  │ POST /generate-code      │ │  │
+│  │  │                     │  │                          │ │  │
+│  │  │ LangChain Agent     │  │ Direct LLM invoke       │ │  │
+│  │  │ ┌─────────────────┐ │  │ (temp=0, deterministic) │ │  │
+│  │  │ │ 5 Tools:        │ │  │                          │ │  │
+│  │  │ │ createElements  │ │  │ SpatialNode[] →          │ │  │
+│  │  │ │ updateElements  │ │  │ React+Tailwind JSX      │ │  │
+│  │  │ │ layoutElements  │ │  │                          │ │  │
+│  │  │ │ createDiagram   │ │  └──────────────────────────┘ │  │
+│  │  │ │ navigateTo      │ │                               │  │
+│  │  │ └─────────────────┘ │  ┌──────────────────────────┐ │  │
+│  │  └─────────┬───────────┘  │ LangSmith (auto-trace)   │ │  │
+│  │            │              └──────────────────────────┘ │  │
+│  │            ▼                                           │  │
+│  │  ┌─────────────────────┐                               │  │
+│  │  │ OpenRouter API      │                               │  │
+│  │  │ (GPT-4o-mini)       │                               │  │
+│  │  └─────────────────────┘                               │  │
+│  └─────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────┘
+```
 
-The Hono AI service runs in a Docker container on Render. It uses LangChain with OpenRouter as the model provider (model-agnostic, swap models without code changes) and LangSmith for full chain observability.
+---
+
+## Data Flow
+
+### AI Agent: Natural Language → Canvas
+
+```
+User: "Create a SWOT analysis"
+  │
+  ├─ Frontend: buildTieredBoardState()
+  │    └─ Viewport shapes → full props (trimmed)
+  │    └─ Off-screen shapes → id + type + text only (~70% token savings)
+  │
+  ├─ CF Worker: verify JWT → check D1 access → add X-Internal-Secret
+  │
+  ├─ Hono: AgentExecutor (max 4 iterations)
+  │    └─ LLM picks createDiagram tool
+  │    └─ Returns { toolCalls, usage }
+  │
+  └─ Frontend: aiResolver.ts
+       └─ editor.batch() → create frames + stickies
+       └─ zoomToFit() → animate camera to created shapes
+```
+
+### Spatial Compiler: Wireframe → React Code
+
+```
+User selects wireframe shapes → clicks "Generate Code"
+  │
+  ├─ spatialAnalyzer.ts
+  │    └─ Geometric containment (AABB, not tldraw parentId)
+  │    └─ Detect layout: row / col / grid
+  │    └─ Classify: button vs input (from label keywords)
+  │    └─ Compute alignSelf: start / center / end
+  │    └─ Output: SpatialNode[] (nested semantic tree)
+  │
+  ├─ Hono: codeGenerator.ts (temp=0, deterministic)
+  │    └─ Strict compiler rules: frame→<nav>, geo→<button>, etc.
+  │    └─ Output: React + Tailwind JSX
+  │
+  └─ CodePreviewPanel (floating, draggable)
+       └─ Preview tab: iframe with React UMD + Tailwind CDN
+       └─ Code tab: copy to clipboard
+```
+
+### Real-Time Sync
+
+```
+User A moves a shape
+  │
+  ├─ tldraw onChange → WebSocket.send(binary diff)
+  │
+  ├─ Durable Object (BoardRoom)
+  │    └─ Write to embedded SQLite
+  │    └─ Broadcast to all other WebSocket connections
+  │
+  └─ User B's browser
+       └─ mergeRemoteChanges() → canvas updates instantly
+```
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Why |
+|-------|-----------|-----|
+| Frontend | React 18 + Vite + tldraw 2.x | High-performance infinite canvas |
+| Auth | Clerk (React SDK + JWT) | Drop-in components, JWT verification |
+| Edge API | Cloudflare Workers | 0ms cold starts, WebSocket support |
+| Real-time Sync | Durable Objects + SQLite | Zero-latency, free tier, tldraw sync template |
+| Metadata DB | Cloudflare D1 | Serverless SQL for board ownership/ACL |
+| AI Framework | Hono + @hono/node-server | Web-standard, shares patterns with CF Worker |
+| AI Orchestration | LangChain.js | Tool-calling agent with structured outputs |
+| LLM Provider | OpenRouter (GPT-4o-mini) | Model-agnostic, swap via env var |
+| Observability | LangSmith | Full chain/tool tracing |
+| Type Safety | TypeScript + Zod | Strict validation at every service boundary |
+| Deployment | CF Pages, CF Workers, Render | Edge + Docker |
+
+---
 
 ## Project Structure
 
 ```
 CollabBoard/
-├── frontend/          # React SPA (Vite + tldraw + Clerk)
+├── frontend/           # React SPA (Vite + tldraw + Clerk)
 │   ├── src/
+│   │   ├── pages/      # BoardPage.tsx, DashboardPage.tsx
+│   │   ├── components/ # CodePreviewPanel, custom toolbar
+│   │   └── utils/      # aiResolver, boardStateBuilder, spatialAnalyzer
 │   └── package.json
 │
-├── backend/           # Cloudflare Worker (WebSockets, Auth, D1 REST)
+├── backend/            # Cloudflare Worker
 │   ├── src/
-│   │   ├── index.ts
-│   │   ├── auth.ts
-│   │   ├── db.ts
+│   │   ├── index.ts    # Request routing + AI proxy
+│   │   ├── auth.ts     # Clerk JWT verification
+│   │   ├── db.ts       # D1 queries (parameterized)
 │   │   └── durable-objects/BoardRoom.ts
-│   ├── wrangler.toml
-│   └── package.json
+│   ├── migrations/     # D1 SQL migrations
+│   └── wrangler.toml
 │
-├── ai-service/        # Dockerized Hono AI microservice (Render)
+├── ai-service/         # Dockerized Hono microservice (Render)
 │   ├── src/
-│   │   ├── index.ts   # Hono app entry + POST /generate
-│   │   └── agent.ts   # LangChain agent + tool definitions (Zod-typed)
-│   ├── Dockerfile
-│   └── package.json
+│   │   ├── index.ts    # Hono routes (/generate, /generate-code)
+│   │   ├── agent.ts    # LangChain agent + 5 tools
+│   │   └── codeGenerator.ts  # Spatial compiler
+│   └── Dockerfile
 │
-├── shared/            # Shared Zod schemas (shapes, API contracts)
-│   ├── src/
-│   │   ├── shapes.ts
-│   │   ├── api.ts
-│   │   └── index.ts
-│   └── package.json
+├── shared/             # Zod schemas (npm workspace)
+│   └── src/
+│       ├── api.ts      # Service boundary contracts
+│       └── shapes.ts   # tldraw shape schemas
 │
 └── docs/
-    └── decisions/
-        └── 001-split-ai-architecture.md
+    ├── claude-pm/      # PM specs and SE implementation prompts
+    └── ListOfPrompts/  # Archived agent prompts
 ```
 
-## Getting Started
+---
+
+## Setup Guide
 
 ### Prerequisites
 
 - Node.js >= 18
-- npm >= 9
-- Docker (for running `ai-service` locally)
-- Cloudflare account (free tier)
-- Clerk account (free tier)
-- OpenRouter account (free tier available)
-- LangSmith account (optional, for tracing)
+- Wrangler CLI (`npm i -g wrangler`)
+- Accounts: Cloudflare, Clerk, OpenRouter
+- Optional: LangSmith (for AI tracing)
 
-### Installation
+### 1. Install & Build Shared
 
 ```bash
-# Install all workspace dependencies
 npm install
-
-# Build the shared package first
 npm run build:shared
 ```
 
-### Development
+### 2. Configure Environment
 
-#### 1. Configure Environment Variables
-
-**Frontend (`frontend/.env`):**
+**Frontend** (`frontend/.env`):
 ```bash
 VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
-VITE_API_URL=http://localhost:8787
+VITE_BACKEND_WS_URL=ws://localhost:8787
 ```
 
-**Backend (`backend/.dev.vars`):**
+**Backend** (`backend/.dev.vars`):
 ```bash
+CLERK_PUBLISHABLE_KEY=pk_test_...
 CLERK_SECRET_KEY=sk_test_...
 AI_SERVICE_URL=http://localhost:3001
-AI_SERVICE_SECRET=dev-internal-secret
+AI_SERVICE_SECRET=dev-secret
 ```
 
-**AI Service (`ai-service/.env`):**
+**AI Service** (`ai-service/.env`):
 ```bash
 OPENROUTER_API_KEY=sk-or-...
-LANGSMITH_API_KEY=ls__...
-LANGSMITH_TRACING=true
-LANGSMITH_PROJECT=collabboard
-INTERNAL_SECRET=dev-internal-secret
+INTERNAL_SECRET=dev-secret
 PORT=3001
+# Optional
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=ls__...
+LANGCHAIN_PROJECT=collabboard
 ```
 
-#### 2. Start Development Servers
+### 3. Start Dev Servers (3 terminals)
 
 ```bash
-# Terminal 1: Cloudflare Worker
-npm run dev:backend
+# Terminal 1: Backend
+npm run dev:backend          # → localhost:8787
 
-# Terminal 2: AI microservice (direct Node.js, no Docker needed locally)
-npm run dev:ai
+# Terminal 2: AI Service
+npm run dev:ai               # → localhost:3001
 
 # Terminal 3: Frontend
-npm run dev:frontend
+npm run dev:frontend          # → localhost:5173
 ```
 
-### Deployment
+### 4. Deploy
 
-#### Frontend (Cloudflare Pages)
 ```bash
-npm run deploy:frontend
-```
-
-#### Backend (Cloudflare Worker)
-```bash
+# Backend → Cloudflare Workers
 cd backend
 wrangler secret put CLERK_SECRET_KEY
-wrangler secret put AI_SERVICE_URL
 wrangler secret put AI_SERVICE_SECRET
-npm run deploy:backend
+npm run deploy
+
+# Frontend → Cloudflare Pages
+cd frontend
+npm run deploy
+
+# AI Service → Render (push to GitHub, auto-builds Dockerfile)
+# Set env vars in Render dashboard
+# Build context: repo root | Dockerfile path: ai-service/Dockerfile
 ```
 
-#### AI Service (Render via Docker)
-Push to your Render-connected repository. Render will build the Dockerfile in `ai-service/` automatically. Set environment variables in the Render dashboard.
+---
 
-## Tech Stack
+## Architectural Rules
 
-| Layer | Technology | Why? |
-|-------|-----------|------|
-| Frontend Framework | React + Vite | Fast builds, hot reload |
-| Canvas Library | tldraw SDK | High-performance infinite canvas |
-| Authentication | Clerk | Drop-in React components, JWT verification |
-| Frontend Hosting | Cloudflare Pages | Free CDN, global edge |
-| Worker Runtime | Cloudflare Workers | 0ms cold starts, WebSocket support |
-| Real-time Sync | Cloudflare Durable Objects | Zero-latency embedded SQLite, free tier |
-| AI HTTP Framework | Hono + @hono/node-server | Web-standard Request/Response, shares patterns with CF Worker |
-| AI Orchestration | LangChain.js | Model-agnostic tool execution, agent executor |
-| LLM Provider | OpenRouter | Model flexibility (Gemini, Llama, Mistral, etc.), single API key |
-| Observability | LangSmith | Full chain/tool tracing for AI debugging |
-| Type Safety | TypeScript + Zod | Strict validation at every service boundary |
+1. **CF Worker stays lean** — no LLM logic. Proxies to Hono service.
+2. **AI in Hono service only** — all LangChain/OpenRouter code in `ai-service/`.
+3. **No Firebase database** — data lives in Durable Objects + D1.
+4. **Zod for everything** — validate AI outputs with `@hono/zod-validator`.
+5. **Internal secret** — browser never calls AI service directly. Worker authenticates via `X-Internal-Secret`.
 
-## Strict Architectural Rules
-
-1. **CF WORKER STAYS LEAN** — no LLM logic in the Worker. It proxies to the Hono service.
-2. **AI IN HONO SERVICE ONLY** — all LangChain/OpenRouter code lives in `ai-service/`. No Express. No Fastify.
-3. **NO FIREBASE DATABASE** — Firebase is for hosting only. Data lives in Durable Objects + D1.
-4. **ZOD FOR EVERYTHING** — validate all AI outputs at the Hono layer with `@hono/zod-validator`.
-5. **INTERNAL SECRET** — the Hono service is never called directly by browsers. The Worker authenticates via `X-Internal-Secret`.
-
-## Resources
-
-- [tldraw Documentation](https://tldraw.dev)
-- [Hono Documentation](https://hono.dev)
-- [LangChain.js Documentation](https://js.langchain.com)
-- [OpenRouter Documentation](https://openrouter.ai/docs)
-- [LangSmith Documentation](https://docs.smith.langchain.com)
-- [Cloudflare Durable Objects](https://developers.cloudflare.com/durable-objects/)
-- [Clerk React SDK](https://clerk.com/docs/quickstarts/react)
+---
 
 ## License
 
