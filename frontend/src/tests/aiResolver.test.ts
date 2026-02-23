@@ -890,3 +890,70 @@ describe('resolveToolCalls — returns affected shape IDs', () => {
     expect(ids).toHaveLength(3);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. navigateToElements resolver (F4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('resolveToolCalls — navigateToElements', () => {
+
+  it('returns the requested shape IDs without creating any shapes', () => {
+    const id1 = createShapeId();
+    const id2 = createShapeId();
+    editor.createShape({ id: id1, type: 'note', x: 800, y: 800, props: { text: 'A' } });
+    editor.createShape({ id: id2, type: 'note', x: 900, y: 800, props: { text: 'B' } });
+
+    const shapeCountBefore = editor.getCurrentPageShapes().length;
+
+    const ids = resolveToolCalls(editor, [{
+      tool: 'navigateToElements',
+      shapeIds: [id1 as string, id2 as string],
+      description: 'Test navigation',
+    }]);
+
+    // Returns the requested IDs
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain(id1 as string);
+    expect(ids).toContain(id2 as string);
+
+    // No new shapes created (read-only operation)
+    expect(editor.getCurrentPageShapes().length).toBe(shapeCountBefore);
+  });
+
+  it('does not modify existing shape properties', () => {
+    const id = createShapeId();
+    editor.createShape({ id, type: 'note', x: 800, y: 800, props: { text: 'Original', color: 'yellow' } });
+
+    resolveToolCalls(editor, [{
+      tool: 'navigateToElements',
+      shapeIds: [id as string],
+    }]);
+
+    const shape = editor.getShape(id) as any;
+    expect(shape.props.text).toBe('Original');
+    expect(shape.props.color).toBe('yellow');
+    expect(shape.x).toBe(800);
+    expect(shape.y).toBe(800);
+  });
+
+  it('works alongside other tool calls in the same batch', () => {
+    const existingId = createShapeId();
+    editor.createShape({ id: existingId, type: 'note', x: 800, y: 800, props: { text: 'Existing' } });
+
+    const ids = resolveToolCalls(editor, [
+      {
+        tool: 'createElements',
+        elements: [{ type: 'sticky', text: 'New note' }],
+      },
+      {
+        tool: 'navigateToElements',
+        shapeIds: [existingId as string],
+        description: 'Navigate to existing',
+      },
+    ]);
+
+    // 1 from createElements + 1 from navigateToElements = 2
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain(existingId as string);
+  });
+});

@@ -261,7 +261,25 @@ export function buildTools() {
     },
   });
 
-  return [createElements, updateElements, layoutElements, createDiagram];
+  const navigateToElements = new DynamicStructuredTool({
+    name: 'navigateToElements',
+    description:
+      'Navigate the user\'s viewport to specific shapes on the board. Use when the user says "find", "show me", "go to", "where is", or "navigate to". Return exact shape IDs from the board state. For framed structures (SWOT, kanban), return the frame IDs — the system will zoom to show them and their contents. This tool does NOT modify anything.',
+    schema: z.object({
+      shapeIds: z.array(z.string()).min(1).describe('Exact shape IDs from board state to navigate to'),
+      description: z.string().optional().describe('Brief label for what was found, e.g. "SWOT Analysis"'),
+    }),
+    func: async (input) => {
+      return JSON.stringify({
+        tool: 'navigateToElements',
+        shapeIds: input.shapeIds,
+        description: input.description || '',
+        _observation: `Navigating to ${input.shapeIds.length} shape(s): ${input.description || 'selected shapes'}`,
+      });
+    },
+  });
+
+  return [createElements, updateElements, layoutElements, createDiagram, navigateToElements];
 }
 
 // ── Spatial system prompt ─────────────────────────────────────────────────────
@@ -281,6 +299,7 @@ AVAILABLE TOOLS:
 - **updateElements**: Edit existing shapes by ID — change text, color, resize (double/half/fit-to-content), or move (left/right/up/down/closer-together).
 - **layoutElements**: Arrange existing shapes by ID into a grid, row, column, or even spacing.
 - **createDiagram**: Create structured framed layouts (SWOT, kanban, user journey, retrospective, custom frames) with sections and items.
+- **navigateToElements**: Navigate the user's view to specific shapes. Use when the user says "find", "show me", "go to", "where is", "navigate to". Return shape IDs matching the query. For framed structures, return the frame IDs. This tool does NOT modify anything — it only moves the camera. When the user asks WHERE something is, ALWAYS use this tool — do not describe the location in words.
 
 SELECTION CONTEXT:
 - Each shape has an 'isSelected' flag and 'parentId' field in the board state.

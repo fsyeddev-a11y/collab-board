@@ -4,10 +4,11 @@
  * Takes the array of intent-based tool calls from the AI agent and converts
  * them into real tldraw Editor API calls.  Handles:
  *
- *  - createElements  → ad-hoc element creation (sticky, shape, text, connector)
- *  - updateElements  → batch edits with semantic instructions
- *  - layoutElements  → arrange existing shapes into layout patterns
- *  - createDiagram   → structured framed layouts (SWOT, kanban, etc.)
+ *  - createElements      → ad-hoc element creation (sticky, shape, text, connector)
+ *  - updateElements      → batch edits with semantic instructions
+ *  - layoutElements      → arrange existing shapes into layout patterns
+ *  - createDiagram       → structured framed layouts (SWOT, kanban, etc.)
+ *  - navigateToElements  → semantic camera navigation (read-only, no canvas changes)
  *
  * The LLM outputs only declarative intent (no coordinates).
  * This resolver handles all canvas math and element placement.
@@ -61,7 +62,13 @@ interface CreateDiagramCall {
   sections: DiagramSection[];
 }
 
-type ToolCall = CreateElementsCall | UpdateElementsCall | LayoutElementsCall | CreateDiagramCall;
+interface NavigateToElementsCall {
+  tool: 'navigateToElements';
+  shapeIds: string[];
+  description?: string;
+}
+
+type ToolCall = CreateElementsCall | UpdateElementsCall | LayoutElementsCall | CreateDiagramCall | NavigateToElementsCall;
 
 // ── Layout geometry constants ─────────────────────────────────────────────────
 
@@ -111,6 +118,9 @@ export function resolveToolCalls(editor: Editor, toolCalls: ToolCall[]): string[
           }
           break;
         }
+        case 'navigateToElements':
+          allIds.push(...resolveNavigateToElements(editor, call));
+          break;
       }
     }
   });
@@ -473,6 +483,21 @@ function resolveLayoutElements(editor: Editor, call: LayoutElementsCall): string
   }
 
   return validIds as string[];
+}
+
+// ── 5. navigateToElements resolver ──────────────────────────────────────────
+//
+// Navigation is a read-only operation — it creates/modifies nothing on canvas.
+// Returns the shape IDs so the caller (BoardPage) can animate the camera.
+
+function resolveNavigateToElements(
+  _editor: Editor,
+  call: NavigateToElementsCall,
+): string[] {
+  if (call.description) {
+    console.log('[AI Navigate]', call.description);
+  }
+  return call.shapeIds;
 }
 
 // ── 4. createDiagram resolver ───────────────────────────────────────────────

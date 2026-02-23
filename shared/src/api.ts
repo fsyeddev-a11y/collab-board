@@ -86,6 +86,14 @@ export const CreateDiagramToolCallSchema = z.object({
   })),
 });
 
+// ── 5. Semantic camera navigation ─────────────────────────────────────────
+
+export const NavigateToElementsToolCallSchema = z.object({
+  tool: z.literal('navigateToElements'),
+  shapeIds: z.array(z.string()).min(1),
+  description: z.string().optional(),
+});
+
 // ── Discriminated union ─────────────────────────────────────────────────────
 
 export const ToolCallSchema = z.discriminatedUnion('tool', [
@@ -93,6 +101,7 @@ export const ToolCallSchema = z.discriminatedUnion('tool', [
   UpdateElementsToolCallSchema,
   LayoutElementsToolCallSchema,
   CreateDiagramToolCallSchema,
+  NavigateToElementsToolCallSchema,
 ]);
 
 export type ToolCall = z.infer<typeof ToolCallSchema>;
@@ -102,6 +111,7 @@ export type ElementUpdate = z.infer<typeof ElementUpdateSchema>;
 export type UpdateElementsToolCall = z.infer<typeof UpdateElementsToolCallSchema>;
 export type LayoutElementsToolCall = z.infer<typeof LayoutElementsToolCallSchema>;
 export type CreateDiagramToolCall = z.infer<typeof CreateDiagramToolCallSchema>;
+export type NavigateToElementsToolCall = z.infer<typeof NavigateToElementsToolCallSchema>;
 
 // ── Hono AI Service → CF Worker ───────────────────────────────────────────────
 export const AIServiceResponseSchema = z.object({
