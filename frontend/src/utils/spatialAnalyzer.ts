@@ -107,6 +107,23 @@ function classifyGeoElement(label: string): {
   return { elementHint: 'button' };
 }
 
+/**
+ * Compute horizontal alignment of a child within its col-layout parent.
+ * Divides parent width into thirds: left → 'start', center → 'center', right → 'end'.
+ * Only meaningful for children of col-layout frames.
+ */
+function computeAlignSelf(
+  childBounds: { x: number; y: number; w: number; h: number },
+  parentBounds: { x: number; y: number; w: number; h: number },
+): 'start' | 'center' | 'end' {
+  const childCenterX = childBounds.x + childBounds.w / 2;
+  const relativeX = (childCenterX - parentBounds.x) / parentBounds.w;
+
+  if (relativeX < 0.33) return 'start';
+  if (relativeX > 0.66) return 'end';
+  return 'center';
+}
+
 interface ShapeEntry {
   id: TLShapeId;
   type: string;
@@ -235,7 +252,11 @@ export function buildSpatialTree(editor: Editor, shapeIds: TLShapeId[]): Spatial
   sortChildren(roots);
 
   // Convert to SpatialNode
-  function toNode(entry: ShapeEntry): SpatialNode {
+  function toNode(
+    entry: ShapeEntry,
+    parentEntry?: ShapeEntry,
+    parentLayoutType?: 'row' | 'col' | 'grid',
+  ): SpatialNode {
     const nodeType = mapType(entry.type);
     const layout =
       nodeType === 'frame' && entry.children.length > 0
@@ -244,6 +265,12 @@ export function buildSpatialTree(editor: Editor, shapeIds: TLShapeId[]): Spatial
     const geoHint =
       nodeType === 'geo'
         ? classifyGeoElement(entry.label)
+        : undefined;
+
+    // Compute alignSelf only for children of col-layout frames
+    const alignSelf =
+      parentEntry && parentLayoutType === 'col'
+        ? computeAlignSelf(entry.bounds, parentEntry.bounds)
         : undefined;
 
     return {
@@ -256,11 +283,14 @@ export function buildSpatialTree(editor: Editor, shapeIds: TLShapeId[]): Spatial
       ...(layout?.gridCols ? { gridCols: layout.gridCols } : {}),
       ...(geoHint ? { elementHint: geoHint.elementHint } : {}),
       ...(geoHint?.inputType ? { inputType: geoHint.inputType } : {}),
-      children: entry.children.map(toNode),
+      ...(alignSelf && alignSelf !== 'start' ? { alignSelf } : {}),
+      children: entry.children.map((child) =>
+        toNode(child, entry, layout?.layoutType),
+      ),
     };
   }
 
-  return roots.map(toNode);
+  return roots.map((root) => toNode(root));
 }
 
 function mapType(tldrawType: string): SpatialNode['type'] {

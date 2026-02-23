@@ -25,6 +25,7 @@ A nested array of nodes. Each node:
 - gridCols: number (only when layoutType is "grid" — number of columns)
 - elementHint: "button" | "input" (only on "geo" nodes — pre-computed element classification)
 - inputType: "text" | "email" | "password" | "search" | "tel" | "url" (only when elementHint is "input")
+- alignSelf: "start" | "center" | "end" (only on children of col-layout frames — horizontal position within parent)
 - children: nested child nodes
 
 ### Connections
@@ -47,11 +48,30 @@ Translate to semantic HTML based on the label:
 
 **CRITICAL LAYOUT RULE — obey layoutType strictly:**
 - layoutType: "row" → className includes "flex flex-row items-center gap-6"
-- layoutType: "col" → className includes "flex flex-col gap-6"
+- layoutType: "col" → className includes "flex flex-col items-start gap-6"
 - layoutType: "grid" → className includes "grid grid-cols-{gridCols} gap-6" (use the gridCols value)
-- No layoutType present → default to "flex flex-col gap-6"
+- No layoutType present → default to "flex flex-col items-start gap-6"
 
-Apply p-6 padding to all frame containers.
+**Semantic element spacing overrides:**
+- <nav> and <header> with layoutType "row": add "justify-evenly w-full" to spread children across the full width
+- <aside> with layoutType "col": add "justify-start" (children stack from top)
+- <form>: keep default layout, do NOT add justify-evenly
+
+**Padding rule:**
+- Root-level frames and semantic containers (<nav>, <form>, <header>, <footer>, <aside>): apply p-6
+- Nested frames (a frame whose parent is another frame) with a generic/empty label or <section>/<div>: apply p-0 (they are layout groupers, not visual containers)
+
+### Child alignment — MANDATORY, obey alignSelf strictly
+If a child node has an alignSelf field, you MUST append the corresponding Tailwind class to that element's className:
+- alignSelf: "start" → append self-start
+- alignSelf: "center" → append self-center
+- alignSelf: "end" → append self-end
+If alignSelf is absent, do not add any self-* class.
+
+EXAMPLE: A button with sizeHint.width "medium" and alignSelf "end" gets:
+className="w-fit px-4 py-2 text-base bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium self-end"
+                                                                                                    ^^^^^^^^
+The self-end class is APPENDED to the element's existing className. This applies to ALL element types (buttons, inputs, text, containers).
 
 ### "geo" → Interactive UI Elements
 **CORE CONVENTION: Every geo shape is an interactive element.** The frontend pre-computes the element type — strictly obey the elementHint and inputType fields. Do NOT guess.
@@ -60,13 +80,16 @@ Apply p-6 padding to all frame containers.
 - Use the inputType field as the HTML type attribute (e.g. inputType: "email" → type="email")
 - Default styling: className="border border-gray-300 rounded-lg px-4 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-500"
 - Use the label as placeholder text
+- **ALIGNMENT**: If the node has alignSelf, APPEND the self-* class to the className above.
 
 **When elementHint is "button"** (or elementHint is absent) → render as <button>:
 - Use the label as button text
 - **Button size is determined by sizeHint — obey strictly:**
-  - sizeHint.width: "narrow" → small button: className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-  - sizeHint.width: "medium" → medium button: className="px-4 py-2 text-base bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-  - sizeHint.width: "wide" → large full-width button: className="px-6 py-3 text-lg w-full bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+  - sizeHint.width: "narrow" → small button: className="w-fit px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+  - sizeHint.width: "medium" → medium button: className="w-fit px-4 py-2 text-base bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+  - sizeHint.width: "wide" → large full-width button: className="w-full px-6 py-3 text-lg bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+- IMPORTANT: narrow and medium buttons use w-fit so they do NOT stretch in flex-col containers. Only wide buttons use w-full.
+- **ALIGNMENT**: If the node has alignSelf, APPEND the self-* class (self-start, self-center, or self-end) to the className above. Example: a medium button with alignSelf "end" → className="w-fit px-4 py-2 ... font-medium self-end"
 
 **Ellipse shapes** (geo: "ellipse"):
 - If label suggests avatar/profile → <div className="rounded-full bg-gray-200 w-10 h-10 flex items-center justify-center"> with emoji 👤

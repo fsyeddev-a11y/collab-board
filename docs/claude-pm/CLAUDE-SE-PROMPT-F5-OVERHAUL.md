@@ -29,7 +29,7 @@ This is the fundamental mental model the entire system enforces. Users learn ONE
 
 | Area | What Changes |
 |------|-------------|
-| `shared/src/api.ts` | Add `layoutType`, `gridCols` to SpatialNode. Add `ArrowConnection` type/schema. Update `CodeGenerateRequestSchema` to accept `connections`. |
+| `shared/src/api.ts` | Add `layoutType`, `gridCols`, `alignSelf` to SpatialNode. Add `ArrowConnection` type/schema. Update `CodeGenerateRequestSchema` to accept `connections`. |
 | `frontend/src/utils/spatialAnalyzer.ts` | Stop filtering arrows. Compute `layoutType`/`gridCols` for frame nodes. Export `buildConnections()` alongside `buildSpatialTree()`. |
 | `frontend/src/pages/BoardPage.tsx` | Call `buildConnections()` and send `connections` array in POST body. Update error message (arrows no longer excluded). |
 | `ai-service/src/codeGenerator.ts` | Replace entire system prompt. Accept `connections` parameter. Include connections in user message. |
@@ -45,6 +45,7 @@ Add these optional fields to SpatialNode:
 - `layoutType` and `gridCols` — only on `frame` nodes (layout direction)
 - `elementHint` — only on `geo` nodes (`'button'` or `'input'`, computed by frontend keyword matching)
 - `inputType` — only when `elementHint` is `'input'` (the HTML input type attribute)
+- `alignSelf` — only on children of `col`-layout frames (horizontal position within parent)
 
 **Type** (replace the existing `SpatialNode` type starting around line 237):
 ```typescript
@@ -61,6 +62,7 @@ export type SpatialNode = {
   gridCols?: number;
   elementHint?: 'button' | 'input';
   inputType?: 'text' | 'email' | 'password' | 'search' | 'tel' | 'url';
+  alignSelf?: 'start' | 'center' | 'end';
   children: SpatialNode[];
 };
 ```
@@ -81,6 +83,7 @@ export const SpatialNodeSchema: z.ZodType<SpatialNode> = z.lazy(() =>
     gridCols: z.number().int().min(1).optional(),
     elementHint: z.enum(['button', 'input']).optional(),
     inputType: z.enum(['text', 'email', 'password', 'search', 'tel', 'url']).optional(),
+    alignSelf: z.enum(['start', 'center', 'end']).optional(),
     children: z.array(SpatialNodeSchema),
   }),
 );
@@ -215,12 +218,39 @@ function classifyGeoElement(label: string): {
 }
 ```
 
-### 2c. Apply `layoutType`/`gridCols`/`elementHint` in `toNode()`
+### 2c. Add `computeAlignSelf()` — horizontal position detection for col-layout children
 
-Update the `toNode()` function inside `buildSpatialTree()`. Frames get layout hints; geo shapes get element hints:
+Add this function near the other layout helpers. It checks where a child's horizontal center falls relative to its parent frame, dividing into thirds:
 
 ```typescript
-function toNode(entry: ShapeEntry): SpatialNode {
+/**
+ * Compute horizontal alignment of a child within its col-layout parent.
+ * Divides parent width into thirds: left → 'start', center → 'center', right → 'end'.
+ * Only meaningful for children of col-layout frames.
+ */
+function computeAlignSelf(
+  childBounds: { x: number; y: number; w: number; h: number },
+  parentBounds: { x: number; y: number; w: number; h: number },
+): 'start' | 'center' | 'end' {
+  const childCenterX = childBounds.x + childBounds.w / 2;
+  const relativeX = (childCenterX - parentBounds.x) / parentBounds.w;
+
+  if (relativeX < 0.33) return 'start';
+  if (relativeX > 0.66) return 'end';
+  return 'center';
+}
+```
+
+### 2d. Apply `layoutType`/`gridCols`/`elementHint`/`alignSelf` in `toNode()`
+
+Update the `toNode()` function inside `buildSpatialTree()`. The function now accepts optional parent context so children of col-layout frames get an `alignSelf` hint:
+
+```typescript
+function toNode(
+  entry: ShapeEntry,
+  parentEntry?: ShapeEntry,
+  parentLayoutType?: 'row' | 'col' | 'grid',
+): SpatialNode {
   const nodeType = mapType(entry.type);
   const layout =
     nodeType === 'frame' && entry.children.length > 0
@@ -229,6 +259,12 @@ function toNode(entry: ShapeEntry): SpatialNode {
   const geoHint =
     nodeType === 'geo'
       ? classifyGeoElement(entry.label)
+      : undefined;
+
+  // Compute alignSelf only for children of col-layout frames
+  const alignSelf =
+    parentEntry && parentLayoutType === 'col'
+      ? computeAlignSelf(entry.bounds, parentEntry.bounds)
       : undefined;
 
   return {
@@ -241,10 +277,18 @@ function toNode(entry: ShapeEntry): SpatialNode {
     ...(layout?.gridCols ? { gridCols: layout.gridCols } : {}),
     ...(geoHint ? { elementHint: geoHint.elementHint } : {}),
     ...(geoHint?.inputType ? { inputType: geoHint.inputType } : {}),
-    children: entry.children.map(toNode),
+    ...(alignSelf && alignSelf !== 'start' ? { alignSelf } : {}),
+    children: entry.children.map((child) =>
+      toNode(child, entry, layout?.layoutType),
+    ),
   };
 }
 ```
+
+**Key design decisions:**
+- `alignSelf` is only computed for children of `col`-layout frames (row and grid handle alignment differently)
+- `alignSelf: 'start'` is **omitted** (it's the default for `items-start` containers — no need to send redundant data)
+- Only `'center'` and `'end'` are sent, which map to `self-center` and `self-end` in the LLM prompt
 
 ### 2c. Stop filtering arrows from the spatial tree
 
@@ -390,6 +434,7 @@ A nested array of nodes. Each node:
 - gridCols: number (only when layoutType is "grid" — number of columns)
 - elementHint: "button" | "input" (only on "geo" nodes — pre-computed element classification)
 - inputType: "text" | "email" | "password" | "search" | "tel" | "url" (only when elementHint is "input")
+- alignSelf: "start" | "center" | "end" (only on children of col-layout frames — horizontal position within parent)
 - children: nested child nodes
 
 ### Connections
@@ -412,11 +457,25 @@ Translate to semantic HTML based on the label:
 
 **CRITICAL LAYOUT RULE — obey layoutType strictly:**
 - layoutType: "row" → className includes "flex flex-row items-center gap-6"
-- layoutType: "col" → className includes "flex flex-col gap-6"
+- layoutType: "col" → className includes "flex flex-col items-start gap-6"
 - layoutType: "grid" → className includes "grid grid-cols-{gridCols} gap-6" (use the gridCols value)
-- No layoutType present → default to "flex flex-col gap-6"
+- No layoutType present → default to "flex flex-col items-start gap-6"
 
-Apply p-6 padding to all frame containers.
+**Semantic element spacing overrides:**
+- <nav> and <header> with layoutType "row": add "justify-evenly w-full" to spread children across the full width
+- <aside> with layoutType "col": add "justify-start" (children stack from top)
+- <form>: keep default layout, do NOT add justify-evenly
+
+**Padding rule:**
+- Root-level frames and semantic containers (<nav>, <form>, <header>, <footer>, <aside>): apply p-6
+- Nested frames (a frame whose parent is another frame) with a generic/empty label or <section>/<div>: apply p-0 (they are layout groupers, not visual containers)
+
+### Child alignment — obey alignSelf strictly
+If a child node has an alignSelf field, apply the corresponding Tailwind class:
+- alignSelf: "start" → self-start (default, rarely sent)
+- alignSelf: "center" → self-center
+- alignSelf: "end" → self-end
+If alignSelf is absent, do not add any self-* class (the container's items-start default applies).
 
 ### "geo" → Interactive UI Elements
 **CORE CONVENTION: Every geo shape is an interactive element.** The frontend pre-computes the element type — strictly obey the elementHint and inputType fields. Do NOT guess.
@@ -429,9 +488,10 @@ Apply p-6 padding to all frame containers.
 **When elementHint is "button"** (or elementHint is absent) → render as <button>:
 - Use the label as button text
 - **Button size is determined by sizeHint — obey strictly:**
-  - sizeHint.width: "narrow" → small button: className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-  - sizeHint.width: "medium" → medium button: className="px-4 py-2 text-base bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-  - sizeHint.width: "wide" → large full-width button: className="px-6 py-3 text-lg w-full bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+  - sizeHint.width: "narrow" → small button: className="w-fit px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+  - sizeHint.width: "medium" → medium button: className="w-fit px-4 py-2 text-base bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+  - sizeHint.width: "wide" → large full-width button: className="w-full px-6 py-3 text-lg bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+- IMPORTANT: narrow and medium buttons use w-fit so they do NOT stretch in flex-col containers. Only wide buttons use w-full.
 
 **Ellipse shapes** (geo: "ellipse"):
 - If label suggests avatar/profile → <div className="rounded-full bg-gray-200 w-10 h-10 flex items-center justify-center"> with emoji 👤
@@ -791,6 +851,70 @@ describe('classifyGeoElement (via buildSpatialTree)', () => {
 });
 ```
 
+### 5d. alignSelf computation tests
+
+Test that children of col-layout frames get correct horizontal alignment based on position:
+
+```typescript
+describe('alignSelf (via buildSpatialTree)', () => {
+  it('computes alignSelf: end for a child in the right third of a col-layout frame', () => {
+    const frame = createShapeId();
+    const leftChild = createShapeId();
+    const rightChild = createShapeId();
+
+    // Frame is 600px wide. rightChild center is at x=500 + 80/2 = 540, relative = 540/600 = 0.9 → end
+    editor.createShape({ id: frame, type: 'frame', x: 0, y: 0, props: { w: 600, h: 300, name: 'loginForm' } });
+    editor.createShape({ id: leftChild, type: 'geo', x: 10, y: 10, props: { w: 200, h: 40, geo: 'rectangle', text: 'Username' } });
+    editor.createShape({ id: rightChild, type: 'geo', x: 500, y: 100, props: { w: 80, h: 40, geo: 'rectangle', text: 'Submit' } });
+
+    const tree = buildSpatialTree(editor, [frame]);
+    const frameNode = tree[0];
+    // leftChild center at x=10+100=110, relative=110/600=0.18 → start (omitted)
+    const left = frameNode.children.find(c => c.label === 'Username')!;
+    const right = frameNode.children.find(c => c.label === 'Submit')!;
+
+    expect(left.alignSelf).toBeUndefined(); // start is omitted (default)
+    expect(right.alignSelf).toBe('end');
+  });
+
+  it('computes alignSelf: center for a child in the middle third', () => {
+    const frame = createShapeId();
+    const child = createShapeId();
+
+    // Frame is 600px wide. child center at x=250 + 100/2 = 300, relative = 300/600 = 0.5 → center
+    editor.createShape({ id: frame, type: 'frame', x: 0, y: 0, props: { w: 600, h: 200, name: 'container' } });
+    editor.createShape({ id: child, type: 'geo', x: 250, y: 50, props: { w: 100, h: 40, geo: 'rectangle', text: 'Centered Button' } });
+
+    const tree = buildSpatialTree(editor, [frame]);
+    expect(tree[0].children[0].alignSelf).toBe('center');
+  });
+
+  it('does not set alignSelf for children of row-layout frames', () => {
+    const frame = createShapeId();
+    const child1 = createShapeId();
+    const child2 = createShapeId();
+
+    // Two children side by side → row layout. alignSelf should not be computed.
+    editor.createShape({ id: frame, type: 'frame', x: 0, y: 0, props: { w: 600, h: 100, name: 'toolbar' } });
+    editor.createShape({ id: child1, type: 'geo', x: 10, y: 10, props: { w: 80, h: 40, geo: 'rectangle', text: 'Home' } });
+    editor.createShape({ id: child2, type: 'geo', x: 500, y: 10, props: { w: 80, h: 40, geo: 'rectangle', text: 'Settings' } });
+
+    const tree = buildSpatialTree(editor, [frame]);
+    expect(tree[0].layoutType).toBe('row');
+    expect(tree[0].children[0].alignSelf).toBeUndefined();
+    expect(tree[0].children[1].alignSelf).toBeUndefined();
+  });
+
+  it('does not set alignSelf for root-level shapes (no parent)', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 100, h: 40, geo: 'rectangle', text: 'Orphan' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].alignSelf).toBeUndefined();
+  });
+});
+```
+
 ---
 
 ## CHANGE 6: Rebuild shared package
@@ -821,6 +945,8 @@ After all changes:
    - Button shapes render as `<button>` with consistent sizing based on sizeHint
    - Note nodes are NOT rendered as visible UI elements
    - Arrow connections produce onClick handlers on source elements
+   - Submit button drawn on right side of form → `alignSelf: "end"` in request body → `self-end` class in generated code
+   - Nested frames (frame inside frame) with generic label → no extra padding (`p-0` or no padding class)
 5. **Button size consistency test**: Draw 3 same-sized rectangles (Home, About, Contact) in a navbar → Generate Code 3 times → all buttons should have identical size classes every time
 6. **Consistency test**: Click Generate Code 3 times on the same wireframe → output should be identical (temperature=0)
 7. **All existing tests still pass** (regression check)
@@ -831,8 +957,8 @@ After all changes:
 
 | File | Action |
 |------|--------|
-| `shared/src/api.ts` | Add layoutType, gridCols to SpatialNode. Add ArrowConnection type/schema. Update CodeGenerateRequestSchema. |
-| `frontend/src/utils/spatialAnalyzer.ts` | Add computeLayoutType(). Update toNode(). Add buildConnections(). |
+| `shared/src/api.ts` | Add layoutType, gridCols, alignSelf to SpatialNode. Add ArrowConnection type/schema. Update CodeGenerateRequestSchema. |
+| `frontend/src/utils/spatialAnalyzer.ts` | Add computeLayoutType(), computeAlignSelf(). Update toNode() with parent context. Add buildConnections(). |
 | `frontend/src/pages/BoardPage.tsx` | Import buildConnections. Send connections in POST body. |
 | `ai-service/src/codeGenerator.ts` | Replace SYSTEM_PROMPT. Accept connections param. Update user message. |
 | `ai-service/src/index.ts` | Pass connections from request to generateCode(). |

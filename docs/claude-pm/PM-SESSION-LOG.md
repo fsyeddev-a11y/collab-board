@@ -70,6 +70,8 @@
 | CB-002-F2 | Auto-pan/zoom to AI-created objects (smart camera behavior) | P0 | Implemented | 2026-02-22 |
 | CB-002-F3 | Viewport windowing — tiered board state (buildTieredBoardState utility) | P0 | Implemented | 2026-02-22 |
 | CB-002-F4 | Semantic camera navigation — navigateToElements tool (5th tool in union) | P0 | Implemented | 2026-02-22 |
+| CB-002-F5 | Spatial compiler (wireframe → React+Tailwind code) | P1 | Implemented (alignSelf fix pending) | 2026-02-22 |
+| CB-002-F5-hotfix | alignSelf prompt compliance fix (co-locate rules in button/input sections) | P0 | Ready for SE | 2026-02-23 |
 
 ## Open Questions
 
@@ -102,3 +104,32 @@
 - Ready for developer review
 - Implement in order: F1 → F2 → F3 → F4 → F5
 - Each feature gets a separate Claude-B prompt for incremental implementation
+
+### Session 3 — 2026-02-23
+**Topics Discussed**: F5 Spatial Compiler post-implementation testing. Submit button alignment bug.
+
+**Testing Results** (F5 overhaul implemented in Session 2):
+- Navbar spacing: Working correctly (row layout, justify-evenly)
+- Input fields: Correctly classified as `<input>` with proper type attributes
+- Button sizing: Consistent based on sizeHint
+- Nested padding: Needs visual verification (rule added)
+- **Submit button alignment**: BUG — button drawn on right side of form renders left-aligned
+
+**Bug Investigation — Submit Button Alignment**:
+1. Root cause identified as two-part problem:
+   - Cascading padding (`p-6` on every frame) — fixed with nested padding rule
+   - Missing horizontal alignment data — fixed with `alignSelf` computed hint (Option B chosen over form-specific rule)
+2. `computeAlignSelf()` added to spatialAnalyzer.ts — divides parent width into thirds
+3. `alignSelf: "end"` confirmed present on Submit node via DevTools Network payload
+4. **LLM still ignores `alignSelf: "end"`** — generated JSX lacks `self-end` class
+5. Root cause: LLM copies prescriptive className templates verbatim from button section, never cross-references the separate alignSelf section. Small models (gpt-4o-mini) especially bad at combining rules from disconnected prompt sections.
+
+**Decisions Made**:
+1. **Co-locate alignSelf reminders** — Add explicit "APPEND self-* class" instructions directly inside the button and input className rules, not just in a separate section
+2. **Add concrete example** — Show a button className with `self-end` appended so the LLM has an exact pattern to follow
+3. **Strengthen language** — Use "MANDATORY" and "MUST append" to reduce likelihood of model skipping the rule
+
+**Action Items**:
+- Claude-SE hotfix prompt saved to docs/claude-pm/CLAUDE-SE-PROMPT-ALIGNSELF-FIX.md
+- Single file change: `ai-service/src/codeGenerator.ts` (SYSTEM_PROMPT only)
+- Re-test after implementation: Submit button should render with `self-end` class

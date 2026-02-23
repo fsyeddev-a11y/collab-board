@@ -641,3 +641,66 @@ describe('classifyGeoElement (via buildSpatialTree)', () => {
     expect(tree[0].inputType).toBeUndefined();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// alignSelf computation
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('alignSelf (via buildSpatialTree)', () => {
+
+  it('computes alignSelf: end for a child in the right third of a col-layout frame', () => {
+    const frame = createShapeId();
+    const leftChild = createShapeId();
+    const rightChild = createShapeId();
+
+    // Frame is 600px wide. rightChild center is at x=500 + 80/2 = 540, relative = 540/600 = 0.9 → end
+    editor.createShape({ id: frame, type: 'frame', x: 0, y: 0, props: { w: 600, h: 300, name: 'loginForm' } });
+    editor.createShape({ id: leftChild, type: 'geo', x: 10, y: 10, props: { w: 200, h: 40, geo: 'rectangle', text: 'Username' } });
+    editor.createShape({ id: rightChild, type: 'geo', x: 500, y: 100, props: { w: 80, h: 40, geo: 'rectangle', text: 'Submit' } });
+
+    const tree = buildSpatialTree(editor, [frame]);
+    const frameNode = tree[0];
+    // leftChild center at x=10+100=110, relative=110/600=0.18 → start (omitted)
+    const left = frameNode.children.find(c => c.label === 'Username')!;
+    const right = frameNode.children.find(c => c.label === 'Submit')!;
+
+    expect(left.alignSelf).toBeUndefined(); // start is omitted (default)
+    expect(right.alignSelf).toBe('end');
+  });
+
+  it('computes alignSelf: center for a child in the middle third', () => {
+    const frame = createShapeId();
+    const child = createShapeId();
+
+    // Frame is 600px wide. child center at x=250 + 100/2 = 300, relative = 300/600 = 0.5 → center
+    editor.createShape({ id: frame, type: 'frame', x: 0, y: 0, props: { w: 600, h: 200, name: 'container' } });
+    editor.createShape({ id: child, type: 'geo', x: 250, y: 50, props: { w: 100, h: 40, geo: 'rectangle', text: 'Centered Button' } });
+
+    const tree = buildSpatialTree(editor, [frame]);
+    expect(tree[0].children[0].alignSelf).toBe('center');
+  });
+
+  it('does not set alignSelf for children of row-layout frames', () => {
+    const frame = createShapeId();
+    const child1 = createShapeId();
+    const child2 = createShapeId();
+
+    // Two children side by side → row layout. alignSelf should not be computed.
+    editor.createShape({ id: frame, type: 'frame', x: 0, y: 0, props: { w: 600, h: 100, name: 'toolbar' } });
+    editor.createShape({ id: child1, type: 'geo', x: 10, y: 10, props: { w: 80, h: 40, geo: 'rectangle', text: 'Home' } });
+    editor.createShape({ id: child2, type: 'geo', x: 500, y: 10, props: { w: 80, h: 40, geo: 'rectangle', text: 'Settings' } });
+
+    const tree = buildSpatialTree(editor, [frame]);
+    expect(tree[0].layoutType).toBe('row');
+    expect(tree[0].children[0].alignSelf).toBeUndefined();
+    expect(tree[0].children[1].alignSelf).toBeUndefined();
+  });
+
+  it('does not set alignSelf for root-level shapes (no parent)', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 100, h: 40, geo: 'rectangle', text: 'Orphan' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].alignSelf).toBeUndefined();
+  });
+});
