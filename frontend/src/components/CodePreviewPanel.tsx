@@ -304,6 +304,7 @@ export function CodePreviewPanel({ code, isLoading, error, onClose }: CodePrevie
               fontFamily: "'Fira Code', 'Cascadia Code', Consolas, monospace",
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
+              color: '#1e1e1e',
               background: '#f8f9fa',
               minHeight: '100%',
             }}>

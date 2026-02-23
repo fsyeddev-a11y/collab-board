@@ -41,7 +41,10 @@ This is the fundamental mental model the entire system enforces. Users learn ONE
 
 ### 1a. Update `SpatialNode` type and schema
 
-Add two optional fields to SpatialNode — `layoutType` and `gridCols`. These only appear on `frame` nodes.
+Add these optional fields to SpatialNode:
+- `layoutType` and `gridCols` — only on `frame` nodes (layout direction)
+- `elementHint` — only on `geo` nodes (`'button'` or `'input'`, computed by frontend keyword matching)
+- `inputType` — only when `elementHint` is `'input'` (the HTML input type attribute)
 
 **Type** (replace the existing `SpatialNode` type starting around line 237):
 ```typescript
@@ -56,6 +59,8 @@ export type SpatialNode = {
   };
   layoutType?: 'row' | 'col' | 'grid';
   gridCols?: number;
+  elementHint?: 'button' | 'input';
+  inputType?: 'text' | 'email' | 'password' | 'search' | 'tel' | 'url';
   children: SpatialNode[];
 };
 ```
@@ -74,6 +79,8 @@ export const SpatialNodeSchema: z.ZodType<SpatialNode> = z.lazy(() =>
     }),
     layoutType: z.enum(['row', 'col', 'grid']).optional(),
     gridCols: z.number().int().min(1).optional(),
+    elementHint: z.enum(['button', 'input']).optional(),
+    inputType: z.enum(['text', 'email', 'password', 'search', 'tel', 'url']).optional(),
     children: z.array(SpatialNodeSchema),
   }),
 );
@@ -166,9 +173,51 @@ function computeLayoutType(
 }
 ```
 
-### 2b. Apply `layoutType`/`gridCols` in `toNode()`
+### 2b. Add `classifyGeoElement()` — deterministic input vs button detection
 
-Update the `toNode()` function inside `buildSpatialTree()`. When the entry type is `'frame'` and it has children, compute and attach the layout hints:
+Add this function near the other helper functions. It does keyword matching in JS so the LLM never has to guess:
+
+```typescript
+/** Input keyword → HTML input type mapping. Case-insensitive match against label. */
+const INPUT_KEYWORDS: Array<{ keywords: string[]; inputType: SpatialNode['inputType'] }> = [
+  { keywords: ['email', 'e-mail'],                    inputType: 'email' },
+  { keywords: ['password', 'passwd'],                  inputType: 'password' },
+  { keywords: ['search', 'find', 'look up'],           inputType: 'search' },
+  { keywords: ['phone', 'tel', 'mobile', 'cell'],      inputType: 'tel' },
+  { keywords: ['url', 'website', 'link', 'web'],       inputType: 'url' },
+  // Generic text inputs — catch-all for data entry shapes
+  { keywords: [
+      'username', 'user name', 'name', 'first name', 'last name', 'full name',
+      'address', 'city', 'state', 'zip', 'country',
+      'enter', 'type', 'type here', 'input',
+      'message', 'comment', 'description', 'notes', 'bio',
+    ],                                                  inputType: 'text' },
+];
+
+/**
+ * Classify a geo shape as 'button' or 'input' based on its label.
+ * Returns elementHint and (for inputs) the HTML input type.
+ */
+function classifyGeoElement(label: string): {
+  elementHint: 'button' | 'input';
+  inputType?: SpatialNode['inputType'];
+} {
+  const lower = label.toLowerCase().trim();
+  if (!lower) return { elementHint: 'button' }; // empty label → button
+
+  for (const entry of INPUT_KEYWORDS) {
+    if (entry.keywords.some((kw) => lower === kw || lower.includes(kw))) {
+      return { elementHint: 'input', inputType: entry.inputType };
+    }
+  }
+
+  return { elementHint: 'button' };
+}
+```
+
+### 2c. Apply `layoutType`/`gridCols`/`elementHint` in `toNode()`
+
+Update the `toNode()` function inside `buildSpatialTree()`. Frames get layout hints; geo shapes get element hints:
 
 ```typescript
 function toNode(entry: ShapeEntry): SpatialNode {
@@ -176,6 +225,10 @@ function toNode(entry: ShapeEntry): SpatialNode {
   const layout =
     nodeType === 'frame' && entry.children.length > 0
       ? computeLayoutType(entry.children)
+      : undefined;
+  const geoHint =
+    nodeType === 'geo'
+      ? classifyGeoElement(entry.label)
       : undefined;
 
   return {
@@ -186,6 +239,8 @@ function toNode(entry: ShapeEntry): SpatialNode {
     sizeHint: { width: widthCategory(entry.bounds.w), height: heightCategory(entry.bounds.h) },
     ...(layout?.layoutType ? { layoutType: layout.layoutType } : {}),
     ...(layout?.gridCols ? { gridCols: layout.gridCols } : {}),
+    ...(geoHint ? { elementHint: geoHint.elementHint } : {}),
+    ...(geoHint?.inputType ? { inputType: geoHint.inputType } : {}),
     children: entry.children.map(toNode),
   };
 }
@@ -333,6 +388,8 @@ A nested array of nodes. Each node:
 - sizeHint: { width: "narrow" | "medium" | "wide", height: "short" | "medium" | "tall" }
 - layoutType: "row" | "col" | "grid" (only on "frame" nodes — computed layout direction)
 - gridCols: number (only when layoutType is "grid" — number of columns)
+- elementHint: "button" | "input" (only on "geo" nodes — pre-computed element classification)
+- inputType: "text" | "email" | "password" | "search" | "tel" | "url" (only when elementHint is "input")
 - children: nested child nodes
 
 ### Connections
@@ -362,29 +419,27 @@ Translate to semantic HTML based on the label:
 Apply p-6 padding to all frame containers.
 
 ### "geo" → Interactive UI Elements
-**CORE CONVENTION: Every geo shape is an interactive element.** Users draw rectangles/ellipses for buttons, inputs, and links. They use frames for containers and the text tool for typography.
+**CORE CONVENTION: Every geo shape is an interactive element.** The frontend pre-computes the element type — strictly obey the elementHint and inputType fields. Do NOT guess.
 
-Determine the specific element using the label text:
-
-**Inputs** — render as <input> when label suggests data entry:
-- Keywords (case-insensitive): Enter, Email, Password, Search, Username, Name, Phone, Address, Type here
-- Use appropriate input type: label contains "email" → type="email", "password" → type="password", "search" → type="search", otherwise type="text"
+**When elementHint is "input"** → render as <input>:
+- Use the inputType field as the HTML type attribute (e.g. inputType: "email" → type="email")
 - Default styling: className="border border-gray-300 rounded-lg px-4 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-500"
 - Use the label as placeholder text
+
+**When elementHint is "button"** (or elementHint is absent) → render as <button>:
+- Use the label as button text
+- **Button size is determined by sizeHint — obey strictly:**
+  - sizeHint.width: "narrow" → small button: className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+  - sizeHint.width: "medium" → medium button: className="px-4 py-2 text-base bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+  - sizeHint.width: "wide" → large full-width button: className="px-6 py-3 text-lg w-full bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
 
 **Ellipse shapes** (geo: "ellipse"):
 - If label suggests avatar/profile → <div className="rounded-full bg-gray-200 w-10 h-10 flex items-center justify-center"> with emoji 👤
 - Otherwise → <div className="rounded-full"> styled as a decorative circle
 
-**Default — ALL other geo shapes → <button>:**
-- This is the fallback for ANY geo shape that does not match input or ellipse rules above
-- Includes navigation items (Home, About, Contact), actions (Submit, Save, Delete), and any other labeled rectangle
-- Default styling: className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-- Use the label as button text
+**Geo with empty label and no elementHint** → decorative placeholder: <div className="rounded-lg bg-gray-100 border border-gray-200"> with sizeHint-based dimensions
 
-**Geo with empty label** → decorative placeholder: <div className="rounded-lg bg-gray-100 border border-gray-200"> with sizeHint-based dimensions
-
-Size mapping from sizeHint (apply to all geo elements):
+General sizeHint dimensions (for non-button geo elements):
 - width: narrow → w-48, medium → w-64, wide → w-full
 - height: short → h-12, medium → h-32, tall → h-64
 
@@ -640,6 +695,102 @@ describe('buildConnections', () => {
 });
 ```
 
+### 5c. Element hint classification tests
+
+These test the `classifyGeoElement()` function via `buildSpatialTree()` output — geo shapes should have `elementHint` and `inputType` set based on their label:
+
+```typescript
+describe('classifyGeoElement (via buildSpatialTree)', () => {
+  it('classifies "Username" as input with type text', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'Username' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('input');
+    expect(tree[0].inputType).toBe('text');
+  });
+
+  it('classifies "Email" as input with type email', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'Email' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('input');
+    expect(tree[0].inputType).toBe('email');
+  });
+
+  it('classifies "Password" as input with type password', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'Password' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('input');
+    expect(tree[0].inputType).toBe('password');
+  });
+
+  it('classifies "Search" as input with type search', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'Search' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('input');
+    expect(tree[0].inputType).toBe('search');
+  });
+
+  it('classifies "Phone" as input with type tel', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'Phone' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('input');
+    expect(tree[0].inputType).toBe('tel');
+  });
+
+  it('classifies "Submit" as button', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'Submit' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('button');
+    expect(tree[0].inputType).toBeUndefined();
+  });
+
+  it('classifies "Home" as button (nav item)', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 100, h: 40, geo: 'rectangle', text: 'Home' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('button');
+  });
+
+  it('classifies empty label as button', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 100, h: 40, geo: 'rectangle', text: '' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('button');
+  });
+
+  it('is case-insensitive', () => {
+    const shape = createShapeId();
+    editor.createShape({ id: shape, type: 'geo', x: 800, y: 800, props: { w: 200, h: 40, geo: 'rectangle', text: 'EMAIL ADDRESS' } });
+
+    const tree = buildSpatialTree(editor, [shape]);
+    expect(tree[0].elementHint).toBe('input');
+    expect(tree[0].inputType).toBe('email');
+  });
+
+  it('does not set elementHint on non-geo shapes', () => {
+    const textShape = createShapeId();
+    editor.createShape({ id: textShape, type: 'text', x: 800, y: 800, props: { text: 'Username' } });
+
+    const tree = buildSpatialTree(editor, [textShape]);
+    expect(tree[0].elementHint).toBeUndefined();
+    expect(tree[0].inputType).toBeUndefined();
+  });
+});
+```
+
 ---
 
 ## CHANGE 6: Rebuild shared package
@@ -661,12 +812,18 @@ After all changes:
 3. **`cd ai-service && npx tsc --noEmit`** — AI service compiles
 4. **Manual test**: Draw a wireframe → select → Generate Code → verify:
    - Request body in DevTools includes `layoutType` on frame nodes
+   - Request body includes `elementHint` and `inputType` on geo nodes
+   - "Username" rectangle → `elementHint: "input"`, `inputType: "text"`
+   - "Submit" rectangle → `elementHint: "button"`, no `inputType`
    - Request body includes `connections` array if arrows with bindings exist
    - Generated code uses flex-row / flex-col / grid matching the layoutType values
+   - Input shapes render as `<input>` with correct type attribute
+   - Button shapes render as `<button>` with consistent sizing based on sizeHint
    - Note nodes are NOT rendered as visible UI elements
    - Arrow connections produce onClick handlers on source elements
-5. **Consistency test**: Click Generate Code 3 times on the same wireframe → output should be identical (temperature=0)
-6. **All existing tests still pass** (regression check)
+5. **Button size consistency test**: Draw 3 same-sized rectangles (Home, About, Contact) in a navbar → Generate Code 3 times → all buttons should have identical size classes every time
+6. **Consistency test**: Click Generate Code 3 times on the same wireframe → output should be identical (temperature=0)
+7. **All existing tests still pass** (regression check)
 
 ---
 
