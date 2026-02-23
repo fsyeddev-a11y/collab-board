@@ -27,6 +27,9 @@ import { patchNoteCloneHandle } from '../utils/noteArrowOverride';
 import { removeFrameKeepContents, deleteFrameWithContents } from '../utils/frameActions';
 import { resolveToolCalls } from '../utils/aiResolver';
 import { buildTieredBoardState } from '../utils/boardStateBuilder';
+import { buildSpatialTree, buildConnections } from '../utils/spatialAnalyzer';
+import { CodePreviewPanel } from '../components/CodePreviewPanel';
+import type { TLShapeId as SharedTLShapeId } from '@tldraw/editor';
 import 'tldraw/tldraw.css';
 
 // ── Force minimap expanded by default ─────────────────────────────────────────
@@ -141,6 +144,8 @@ export function BoardPage() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [codePreview, setCodePreview] = useState<{ code: string; isLoading: boolean; error: string | null } | null>(null);
+  const [selectedCount, setSelectedCount] = useState(0);
   const editorRef = useRef<Editor | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const isRemoteChangeRef = useRef(false);
@@ -224,6 +229,62 @@ export function BoardPage() {
       setAiError(err instanceof Error ? err.message : 'Generation failed');
     } finally {
       setAiLoading(false);
+    }
+  };
+
+  // ── Code generation handler ─────────────────────────────────────────────────
+
+  const handleCodeGenerate = async () => {
+    if (!editorRef.current || selectedCount === 0) return;
+
+    const editor = editorRef.current;
+    const selectedIds = editor.getSelectedShapeIds();
+    if (selectedIds.length === 0) return;
+
+    setCodePreview({ code: '', isLoading: true, error: null });
+
+    try {
+      const token = await getToken({ skipCache: true });
+      if (!token) {
+        setCodePreview({ code: '', isLoading: false, error: 'Not authenticated' });
+        return;
+      }
+
+      const spatialTree = buildSpatialTree(editor, selectedIds as SharedTLShapeId[]);
+      const connections = buildConnections(editor, selectedIds as SharedTLShapeId[]);
+
+      if (spatialTree.length === 0) {
+        setCodePreview({ code: '', isLoading: false, error: 'No valid shapes selected' });
+        return;
+      }
+
+      const res = await fetch(`${API_URL}/api/generate-code`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          spatialTree,
+          connections: connections.length > 0 ? connections : undefined,
+          boardId,
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as Record<string, string>).error ?? `HTTP ${res.status}`);
+      }
+
+      const data = await res.json() as { code: string };
+      setCodePreview({ code: data.code, isLoading: false, error: null });
+    } catch (err) {
+      console.error('[CodeGen] Generation failed:', err);
+      setCodePreview({
+        code: '',
+        isLoading: false,
+        error: err instanceof Error ? err.message : 'Code generation failed',
+      });
     }
   };
 
@@ -507,6 +568,13 @@ export function BoardPage() {
 
     const unsubscribe = editor.store.listen(handleChange, { source: 'user', scope: 'document' });
 
+    // Track selection changes for the "Generate Code" button.
+    // No source filter — selection changes can originate from multiple sources.
+    const unsubscribeSelection = editor.store.listen(
+      () => { setSelectedCount(editor.getSelectedShapeIds().length); },
+      { scope: 'session' },
+    );
+
     let lastCursorUpdate = 0, lastCursorX = 0, lastCursorY = 0;
     const cursorInterval = setInterval(() => {
       const ws = wsRef.current;
@@ -525,7 +593,7 @@ export function BoardPage() {
       }
     }, CURSOR_THROTTLE_MS);
 
-    return () => { unsubscribe(); clearInterval(cursorInterval); };
+    return () => { unsubscribe(); unsubscribeSelection(); clearInterval(cursorInterval); };
   };
 
   // boardId guard — should never be undefined given the route definition
@@ -647,6 +715,36 @@ export function BoardPage() {
       {/* ── Canvas ──────────────────────────────────────────────────────────── */}
       <div style={{ flex: 1, position: 'relative' }}>
         <Tldraw components={TLDRAW_COMPONENTS} onMount={handleEditorMount} />
+
+        {/* ── Generate Code Button ─────────────────────────────────────────── */}
+        {selectedCount > 0 && (
+          <button
+            onClick={handleCodeGenerate}
+            disabled={codePreview?.isLoading}
+            style={{
+              position: 'absolute', bottom: 80, right: 20, zIndex: 1000,
+              padding: '10px 16px', borderRadius: 24,
+              background: codePreview?.isLoading ? '#a78bfa' : '#8b5cf6',
+              color: 'white', border: 'none',
+              fontSize: 13, fontWeight: 600, cursor: codePreview?.isLoading ? 'wait' : 'pointer',
+              boxShadow: '0 4px 12px rgba(139,92,246,0.4)',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}
+            title="Generate React code from selected wireframe"
+          >
+            {codePreview?.isLoading ? 'Generating...' : `Generate Code (${selectedCount})`}
+          </button>
+        )}
+
+        {/* ── Code Preview Panel ──────────────────────────────────────────── */}
+        {codePreview && (
+          <CodePreviewPanel
+            code={codePreview.code}
+            isLoading={codePreview.isLoading}
+            error={codePreview.error}
+            onClose={() => setCodePreview(null)}
+          />
+        )}
 
         {/* ── AI Prompt Panel ──────────────────────────────────────────────── */}
         {!aiPanelOpen && (

@@ -69,6 +69,7 @@
 | CB-002-F1 | Minimap always visible (localStorage pre-seed) | P0 | Implemented | 2026-02-22 |
 | CB-002-F2 | Auto-pan/zoom to AI-created objects (smart camera behavior) | P0 | Implemented | 2026-02-22 |
 | CB-002-F3 | Viewport windowing — tiered board state (buildTieredBoardState utility) | P0 | Implemented | 2026-02-22 |
+| CB-002-F4 | Semantic camera navigation — navigateToElements tool (5th tool in union) | P0 | Implemented | 2026-02-22 |
 
 ## Open Questions
 

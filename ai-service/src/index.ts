@@ -2,8 +2,9 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { timeout } from 'hono/timeout';
 import { zValidator } from '@hono/zod-validator';
-import { AIServiceRequestSchema, AIServiceResponseSchema } from '@collabboard/shared';
+import { AIServiceRequestSchema, AIServiceResponseSchema, CodeGenerateRequestSchema, CodeGenerateResponseSchema } from '@collabboard/shared';
 import { runAgent, getLLM } from './agent.js';
+import { generateCode } from './codeGenerator.js';
 
 // ── Environment checks ───────────────────────────────────────────────────────
 
@@ -85,6 +86,44 @@ app.post(
       console.error('[/generate] Agent error:', err);
       const message =
         err instanceof Error ? err.message : 'Agent execution failed';
+      return c.json({ error: message }, 500);
+    }
+  },
+);
+
+// POST /generate-code — spatial compiler endpoint.
+app.use('/generate-code', timeout(120_000));
+
+app.use('/generate-code', async (c, next) => {
+  const secret = c.req.header('x-internal-secret');
+  if (!secret || secret !== INTERNAL_SECRET) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  await next();
+});
+
+app.post(
+  '/generate-code',
+  zValidator('json', CodeGenerateRequestSchema, (result, c) => {
+    if (!result.success) {
+      return c.json(
+        { error: 'Invalid request', issues: result.error.flatten() },
+        400,
+      );
+    }
+  }),
+  async (c) => {
+    const { spatialTree, prompt, connections } = c.req.valid('json');
+
+    try {
+      const result = await generateCode(spatialTree, prompt, connections, c.req.raw.signal);
+
+      const response = CodeGenerateResponseSchema.parse(result);
+      return c.json(response);
+    } catch (err) {
+      console.error('[/generate-code] Error:', err);
+      const message =
+        err instanceof Error ? err.message : 'Code generation failed';
       return c.json({ error: message }, 500);
     }
   },

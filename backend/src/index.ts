@@ -267,5 +267,33 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       });
     }
 
+    // ── POST /api/generate-code — proxy to Hono AI service (spatial compiler) ──
+    if (url.pathname === '/api/generate-code' && request.method === 'POST') {
+      const claims = await verifyClerkRequest(request, env.CLERK_SECRET_KEY);
+      if (!claims) return apiError('Unauthorized', 401);
+
+      if (!env.AI_SERVICE_URL || !env.AI_SERVICE_SECRET) {
+        return apiError('AI service not configured', 503);
+      }
+
+      let body: unknown;
+      try { body = await request.json(); } catch { return apiError('Invalid JSON body', 400); }
+
+      const aiResponse = await fetch(`${env.AI_SERVICE_URL}/generate-code`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Secret': env.AI_SERVICE_SECRET,
+        },
+        body: JSON.stringify(body),
+      });
+
+      const aiBody = await aiResponse.text();
+      return new Response(aiBody, {
+        status: aiResponse.status,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
+    }
+
     return new Response('Not Found', { status: 404, headers: CORS_HEADERS });
 }

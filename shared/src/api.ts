@@ -231,3 +231,63 @@ export const BoardStateSchema = z.object({
 });
 
 export type BoardState = z.infer<typeof BoardStateSchema>;
+
+// ── Spatial Compiler (F5) ────────────────────────────────────────────────────
+
+export type SpatialNode = {
+  shapeId: string;
+  type: 'frame' | 'geo' | 'text' | 'note';
+  label: string;
+  geo?: string;
+  sizeHint: {
+    width: 'narrow' | 'medium' | 'wide';
+    height: 'short' | 'medium' | 'tall';
+  };
+  layoutType?: 'row' | 'col' | 'grid';
+  gridCols?: number;
+  children: SpatialNode[];
+};
+
+export const SpatialNodeSchema: z.ZodType<SpatialNode> = z.lazy(() =>
+  z.object({
+    shapeId: z.string(),
+    type: z.enum(['frame', 'geo', 'text', 'note']),
+    label: z.string(),
+    geo: z.string().optional(),
+    sizeHint: z.object({
+      width: z.enum(['narrow', 'medium', 'wide']),
+      height: z.enum(['short', 'medium', 'tall']),
+    }),
+    layoutType: z.enum(['row', 'col', 'grid']).optional(),
+    gridCols: z.number().int().min(1).optional(),
+    children: z.array(SpatialNodeSchema),
+  }),
+);
+
+export type ArrowConnection = {
+  fromShapeId: string;
+  toShapeId: string;
+  label: string;
+};
+
+export const ArrowConnectionSchema = z.object({
+  fromShapeId: z.string(),
+  toShapeId: z.string(),
+  label: z.string(),
+});
+
+export const CodeGenerateRequestSchema = z.object({
+  prompt: z.string().optional(),
+  spatialTree: z.array(SpatialNodeSchema),
+  connections: z.array(ArrowConnectionSchema).optional(),
+  boardId: z.string(),
+});
+
+export type CodeGenerateRequest = z.infer<typeof CodeGenerateRequestSchema>;
+
+export const CodeGenerateResponseSchema = z.object({
+  code: z.string(),
+  modelUsed: z.string().optional(),
+});
+
+export type CodeGenerateResponse = z.infer<typeof CodeGenerateResponseSchema>;
