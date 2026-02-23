@@ -73,6 +73,8 @@
 | CB-002-F5 | Spatial compiler (wireframe → React+Tailwind code) | P1 | Implemented (alignSelf fix pending) | 2026-02-22 |
 | CB-002-F5-hotfix | alignSelf prompt compliance fix (co-locate rules in button/input sections) | P0 | Implemented | 2026-02-23 |
 | CB-002-F6 | Zoom-to-fit on board load (viewport initialization) | P0 | Ready for SE | 2026-02-23 |
+| CB-002-F7 | AI Stats Panel — token usage and viewport windowing savings display | P1 | Ready for SE | 2026-02-23 |
+| CB-002-F8 | Trim board state props — strip unused fields before sending to AI agent | P0 | Ready for SE | 2026-02-23 |
 
 ## Open Questions
 
@@ -134,3 +136,20 @@
 - Claude-SE hotfix prompt saved to docs/claude-pm/CLAUDE-SE-PROMPT-ALIGNSELF-FIX.md
 - Single file change: `ai-service/src/codeGenerator.ts` (SYSTEM_PROMPT only)
 - Re-test after implementation: Submit button should render with `self-end` class
+
+**F7 — AI Stats Panel** (same session):
+- User wants to show F3 viewport windowing token savings on the website during presentations
+- Currently requires switching to LangSmith — messy during demos
+- Design: stats bar inside AI panel showing token counts, shape breakdown, and savings percentage
+- Data pipeline: LangChain response metadata → Hono response → CF Worker passthrough → frontend stats bar
+- Frontend also computes board state metrics (full size vs tiered size) independently
+- Key presentation metric: "Viewport windowing saved ~74% of board state tokens"
+- Claude-SE prompt saved to docs/claude-pm/CLAUDE-SE-PROMPT-AI-STATS-PANEL.md
+
+**F8 — Board State Prop Trimming** (same session):
+- User observed in LangSmith traces that board state sends many unused props (font, align, verticalAlign, growY, fontSizeAdjustment, url, scale, w, h, labelColor, fill, dash, bend, start/end coordinates, arrowheadStart/End, labelPosition)
+- Investigated all consumers: agent tools only use `text`, `color`, `name` (frames), and `geo` (geo shapes)
+- Code generator path (spatialAnalyzer.ts) is completely separate — reads from tldraw Editor directly
+- Estimated 65-75% reduction in board state token cost
+- Single-file change: `frontend/src/utils/boardStateBuilder.ts` — add `trimProps()` helper
+- Claude-SE prompt saved to docs/claude-pm/CLAUDE-SE-PROMPT-BOARDSTATE-TRIM.md

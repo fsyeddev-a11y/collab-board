@@ -166,7 +166,7 @@ export async function generateCode(
   prompt?: string,
   connections?: ArrowConnection[],
   signal?: AbortSignal,
-): Promise<{ code: string; modelUsed: string }> {
+): Promise<{ code: string; modelUsed: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
   // Dedicated LLM instance with temperature 0 for deterministic code output.
   // Separate from the agent's getLLM() which uses temperature 0.2 for creativity.
   const llm = new ChatOpenAI({
@@ -199,6 +199,12 @@ export async function generateCode(
     { signal },
   );
 
+  // Extract token usage from LangChain response metadata
+  const usageMeta = response.usage_metadata;
+  const usage = usageMeta
+    ? { promptTokens: usageMeta.input_tokens, completionTokens: usageMeta.output_tokens, totalTokens: usageMeta.total_tokens }
+    : undefined;
+
   const rawText = typeof response.content === 'string'
     ? response.content
     : (response.content as Array<{ type: string; text?: string }>)
@@ -209,7 +215,7 @@ export async function generateCode(
   const code = extractCode(rawText);
   const modelUsed = process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini';
 
-  return { code, modelUsed };
+  return { code, modelUsed, usage };
 }
 
 /** Extract code from ```jsx or ```tsx fences, fallback to entire response. */

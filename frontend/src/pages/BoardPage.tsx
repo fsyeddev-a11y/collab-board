@@ -146,6 +146,17 @@ export function BoardPage() {
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [codePreview, setCodePreview] = useState<{ code: string; isLoading: boolean; error: string | null } | null>(null);
   const [selectedCount, setSelectedCount] = useState(0);
+  const [aiStats, setAiStats] = useState<{
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    modelUsed?: string;
+    durationMs: number;
+    totalShapes: number;
+    viewportShapes: number;
+    offScreenShapes: number;
+    savedPercent: number;
+  } | null>(null);
   const editorRef = useRef<Editor | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const isRemoteChangeRef = useRef(false);
@@ -171,14 +182,16 @@ export function BoardPage() {
 
     setAiLoading(true);
     setAiError(null);
+    setAiStats(null);
 
     try {
+      const startTime = Date.now();
       const token = await getToken({ skipCache: true });
       if (!token) { setAiError('Not authenticated'); return; }
 
       // Build tiered board state: viewport shapes get full detail,
       // off-screen shapes get compact summary (id/type/parentId/text only).
-      const shapes = buildTieredBoardState(editorRef.current);
+      const { shapes, metrics } = buildTieredBoardState(editorRef.current);
 
       const res = await fetch(`${API_URL}/api/generate`, {
         method: 'POST',
@@ -194,7 +207,7 @@ export function BoardPage() {
         throw new Error((body as Record<string, string>).error ?? `HTTP ${res.status}`);
       }
 
-      const data = await res.json() as { toolCalls: unknown[] };
+      const data = await res.json() as { toolCalls: unknown[]; usage?: { promptTokens: number; completionTokens: number; totalTokens: number }; modelUsed?: string };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const affectedIds = resolveToolCalls(editorRef.current, data.toolCalls as any);
       setAiPrompt('');
@@ -224,6 +237,23 @@ export function BoardPage() {
           { animation: { duration: 500 } },
         );
       }
+
+      // Set AI stats for display
+      const durationMs = Date.now() - startTime;
+      const savedPercent = metrics.fullSizeChars > 0
+        ? Math.round((1 - metrics.tieredSizeChars / metrics.fullSizeChars) * 100)
+        : 0;
+      setAiStats({
+        promptTokens: data.usage?.promptTokens,
+        completionTokens: data.usage?.completionTokens,
+        totalTokens: data.usage?.totalTokens,
+        modelUsed: data.modelUsed,
+        durationMs,
+        totalShapes: metrics.totalShapes,
+        viewportShapes: metrics.viewportShapes,
+        offScreenShapes: metrics.offScreenShapes,
+        savedPercent: Math.max(0, savedPercent),
+      });
     } catch (err) {
       console.error('[AI] Generation failed:', err);
       setAiError(err instanceof Error ? err.message : 'Generation failed');
@@ -826,6 +856,50 @@ export function BoardPage() {
             >
               {aiLoading ? 'Generating...' : 'Generate'}
             </button>
+
+            {aiStats && !aiLoading && (
+              <div style={{
+                padding: '10px 12px', borderRadius: 8,
+                background: '#f8fafc', border: '1px solid #e2e8f0',
+                fontSize: 11, color: '#475569', lineHeight: 1.6,
+                display: 'flex', flexDirection: 'column', gap: 4,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontWeight: 600, fontSize: 12, color: '#334155' }}>AI Stats</span>
+                  <button
+                    onClick={() => setAiStats(null)}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 14, padding: 0 }}
+                  >
+                    x
+                  </button>
+                </div>
+
+                {aiStats.totalTokens != null && (
+                  <div>
+                    <span style={{ fontWeight: 600 }}>Tokens:</span>{' '}
+                    {aiStats.promptTokens?.toLocaleString()} prompt + {aiStats.completionTokens?.toLocaleString()} completion = {aiStats.totalTokens.toLocaleString()} total
+                  </div>
+                )}
+
+                <div>
+                  <span style={{ fontWeight: 600 }}>Board state:</span>{' '}
+                  {aiStats.viewportShapes}/{aiStats.totalShapes} shapes sent with full detail
+                  {aiStats.offScreenShapes > 0 && (
+                    <span> ({aiStats.offScreenShapes} off-screen compressed)</span>
+                  )}
+                </div>
+
+                {aiStats.savedPercent > 0 && (
+                  <div style={{ color: '#059669', fontWeight: 600 }}>
+                    Viewport windowing saved ~{aiStats.savedPercent}% of board state tokens
+                  </div>
+                )}
+
+                <div style={{ color: '#94a3b8', fontSize: 10 }}>
+                  {aiStats.modelUsed ?? 'unknown model'} &middot; {(aiStats.durationMs / 1000).toFixed(1)}s
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

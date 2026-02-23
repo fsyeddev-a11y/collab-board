@@ -30,7 +30,15 @@ export interface OffScreenShape {
 
 export type TieredShape = ViewportShape | OffScreenShape;
 
-export function buildTieredBoardState(editor: Editor): TieredShape[] {
+export interface BoardStateMetrics {
+  totalShapes: number;
+  viewportShapes: number;
+  offScreenShapes: number;
+  tieredSizeChars: number;
+  fullSizeChars: number;
+}
+
+export function buildTieredBoardState(editor: Editor): { shapes: TieredShape[]; metrics: BoardStateMetrics } {
   const selectedIds = new Set(editor.getSelectedShapeIds());
   const allShapes = editor.getCurrentPageShapes();
 
@@ -70,7 +78,10 @@ export function buildTieredBoardState(editor: Editor): TieredShape[] {
   }
 
   // Build tiered array (no x, y coordinates — LLM never uses them)
-  return allShapes.map((s): TieredShape => {
+  const viewportCount = viewportIds.size;
+  const totalCount = allShapes.length;
+
+  const tieredShapes = allShapes.map((s): TieredShape => {
     const props = (s as unknown as Record<string, unknown>).props as Record<string, unknown>;
     if (viewportIds.has(s.id)) {
       return {
@@ -90,4 +101,27 @@ export function buildTieredBoardState(editor: Editor): TieredShape[] {
     }
     return { id: s.id, type: s.type, parentId: s.parentId as string, text };
   });
+
+  const tieredJson = JSON.stringify(tieredShapes);
+
+  // Estimate full-detail size: what would be sent without viewport windowing
+  const fullShapes = allShapes.map((s) => {
+    const props = (s as unknown as Record<string, unknown>).props as Record<string, unknown>;
+    return {
+      id: s.id, type: s.type, parentId: s.parentId as string,
+      isSelected: selectedIds.has(s.id), props,
+    };
+  });
+  const fullJson = JSON.stringify(fullShapes);
+
+  return {
+    shapes: tieredShapes,
+    metrics: {
+      totalShapes: totalCount,
+      viewportShapes: viewportCount,
+      offScreenShapes: totalCount - viewportCount,
+      tieredSizeChars: tieredJson.length,
+      fullSizeChars: fullJson.length,
+    },
+  };
 }

@@ -71,7 +71,7 @@ describe('buildTieredBoardState', () => {
     editor.createShape({ id: createShapeId(), type: 'geo', x: 400, y: 400, props: { w: 100, h: 100 } });
     editor.createShape({ id: createShapeId(), type: 'note', x: 700, y: 200, props: { text: 'Hi' } });
 
-    const result = buildTieredBoardState(editor);
+    const { shapes: result } = buildTieredBoardState(editor);
 
     expect(result).toHaveLength(3);
     for (const s of result) {
@@ -95,7 +95,7 @@ describe('buildTieredBoardState', () => {
     editor.createShape({ id: outId1, type: 'geo', x: 5000, y: 5000, props: { w: 100, h: 100, text: 'Far' } });
     editor.createShape({ id: outId2, type: 'note', x: 5000, y: 6000, props: { text: 'Also far' } });
 
-    const result = buildTieredBoardState(editor);
+    const { shapes: result } = buildTieredBoardState(editor);
 
     expect(result).toHaveLength(5);
 
@@ -120,7 +120,7 @@ describe('buildTieredBoardState', () => {
     editor.createShape({ id: createShapeId(), type: 'geo', x: 100, y: 100, props: { w: 100, h: 100 } });
     editor.createShape({ id: createShapeId(), type: 'note', x: 5000, y: 5000, props: { text: 'Off' } });
 
-    const result = buildTieredBoardState(editor);
+    const { shapes: result } = buildTieredBoardState(editor);
 
     for (const s of result) {
       expect(s).not.toHaveProperty('x');
@@ -147,7 +147,7 @@ describe('buildTieredBoardState', () => {
       props: { text: 'Far child' },
     } as Parameters<typeof editor.createShape>[0]);
 
-    const result = buildTieredBoardState(editor);
+    const { shapes: result } = buildTieredBoardState(editor);
 
     // Both frame and child should have full props (frame is in viewport → child promoted)
     const frameResult = result.find(s => s.id === frameId)!;
@@ -177,7 +177,7 @@ describe('buildTieredBoardState', () => {
     });
     editor.reparentShapes([childId], frameId);
 
-    const result = buildTieredBoardState(editor);
+    const { shapes: result } = buildTieredBoardState(editor);
 
     const childResult = result.find(s => s.id === childId)!;
     const frameResult = result.find(s => s.id === frameId)!;
@@ -199,7 +199,7 @@ describe('buildTieredBoardState', () => {
       props: { w: 100, h: 100, text: '' },
     });
 
-    const result = buildTieredBoardState(editor);
+    const { shapes: result } = buildTieredBoardState(editor);
     const offScreen = result.filter(isOffScreenShape);
 
     expect(offScreen).toHaveLength(2);
@@ -225,7 +225,7 @@ describe('buildTieredBoardState', () => {
       props: { w: 100, h: 100, text: 'Near edge' },
     });
 
-    const result = buildTieredBoardState(editor);
+    const { shapes: result } = buildTieredBoardState(editor);
     const shape = result.find(s => s.id === paddedId)!;
 
     expect(isViewportShape(shape)).toBe(true);
@@ -242,7 +242,7 @@ describe('buildTieredBoardState', () => {
       props: { text: 'Too far' },
     });
 
-    const result = buildTieredBoardState(editor);
+    const { shapes: result } = buildTieredBoardState(editor);
     const shape = result.find(s => s.id === farId)!;
 
     expect(isOffScreenShape(shape)).toBe(true);
@@ -253,7 +253,7 @@ describe('buildTieredBoardState', () => {
   it('returns empty array for an empty board', () => {
     mockViewport(editor, 0, 0, 1000, 800);
 
-    const result = buildTieredBoardState(editor);
+    const { shapes: result } = buildTieredBoardState(editor);
     expect(result).toEqual([]);
   });
 
@@ -264,7 +264,7 @@ describe('buildTieredBoardState', () => {
     editor.createShape({ id: createShapeId(), type: 'note', x: 100, y: 100, props: { text: 'A' } });
     editor.createShape({ id: createShapeId(), type: 'geo', x: 300, y: 300, props: { w: 100, h: 100, text: 'B' } });
 
-    const result = buildTieredBoardState(editor);
+    const { shapes: result } = buildTieredBoardState(editor);
 
     expect(result).toHaveLength(2);
     for (const s of result) {
@@ -298,7 +298,7 @@ describe('buildTieredBoardState', () => {
       props: { text: 'Deep child' },
     } as Parameters<typeof editor.createShape>[0]);
 
-    const result = buildTieredBoardState(editor);
+    const { shapes: result } = buildTieredBoardState(editor);
 
     // Outer frame in viewport → inner frame promoted as child.
     // Inner frame is also a frame → its children (noteId) promoted in pass 2.
@@ -321,7 +321,7 @@ describe('buildTieredBoardState', () => {
       props: { w: 100, h: 100, text: 'Edge touch' },
     });
 
-    const result = buildTieredBoardState(editor);
+    const { shapes: result } = buildTieredBoardState(editor);
     const shape = result.find(s => s.id === edgeId)!;
 
     expect(isViewportShape(shape)).toBe(true);
@@ -358,7 +358,7 @@ describe('buildTieredBoardState', () => {
       props: { start: { x: 0, y: 0 }, end: { x: 100, y: 0 }, text: 'Arrow label' },
     });
 
-    const result = buildTieredBoardState(editor);
+    const { shapes: result } = buildTieredBoardState(editor);
     const offScreen = result.filter(isOffScreenShape) as OffScreenShape[];
 
     expect(offScreen.find(s => s.id === noteId)!.text).toBe('Note text');

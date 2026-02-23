@@ -113,10 +113,20 @@ export type LayoutElementsToolCall = z.infer<typeof LayoutElementsToolCallSchema
 export type CreateDiagramToolCall = z.infer<typeof CreateDiagramToolCallSchema>;
 export type NavigateToElementsToolCall = z.infer<typeof NavigateToElementsToolCallSchema>;
 
+// ── Token usage (returned from LangChain) ────────────────────────────────────
+export const TokenUsageSchema = z.object({
+  promptTokens: z.number(),
+  completionTokens: z.number(),
+  totalTokens: z.number(),
+});
+
+export type TokenUsage = z.infer<typeof TokenUsageSchema>;
+
 // ── Hono AI Service → CF Worker ───────────────────────────────────────────────
 export const AIServiceResponseSchema = z.object({
   toolCalls: z.array(ToolCallSchema),
   modelUsed: z.string().optional(),   // e.g. "openai/gpt-4o-mini"
+  usage: TokenUsageSchema.optional(),
 });
 
 export type AIServiceResponse = z.infer<typeof AIServiceResponseSchema>;
@@ -294,6 +304,7 @@ export type CodeGenerateRequest = z.infer<typeof CodeGenerateRequestSchema>;
 export const CodeGenerateResponseSchema = z.object({
   code: z.string(),
   modelUsed: z.string().optional(),
+  usage: TokenUsageSchema.optional(),
 });
 
 export type CodeGenerateResponse = z.infer<typeof CodeGenerateResponseSchema>;

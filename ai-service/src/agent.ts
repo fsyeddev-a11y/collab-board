@@ -354,7 +354,7 @@ export async function runAgent(
   userPrompt: string,
   boardState: unknown[],
   signal?: AbortSignal,
-): Promise<AgentToolCall[]> {
+): Promise<{ toolCalls: AgentToolCall[]; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
   const tools = buildTools();
   const llm = getLLM();
 
@@ -373,12 +373,26 @@ export async function runAgent(
     maxIterations: 4,
   });
 
+  // Track token usage across all LLM calls in this agent run
+  let totalPromptTokens = 0;
+  let totalCompletionTokens = 0;
+
+  const tokenCallback = {
+    handleLLMEnd(output: { llmOutput?: { tokenUsage?: { promptTokens?: number; completionTokens?: number } } }) {
+      const usage = output?.llmOutput?.tokenUsage;
+      if (usage) {
+        totalPromptTokens += usage.promptTokens ?? 0;
+        totalCompletionTokens += usage.completionTokens ?? 0;
+      }
+    },
+  };
+
   const result = await executor.invoke(
     {
       input: userPrompt,
       boardState: JSON.stringify(boardState, null, 2),
     },
-    { signal },
+    { signal, callbacks: [tokenCallback] },
   );
 
   // Collect tool calls from intermediate steps.
@@ -397,5 +411,9 @@ export async function runAgent(
     }
   }
 
-  return toolCalls;
+  const usage = (totalPromptTokens > 0 || totalCompletionTokens > 0)
+    ? { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, totalTokens: totalPromptTokens + totalCompletionTokens }
+    : undefined;
+
+  return { toolCalls, usage };
 }

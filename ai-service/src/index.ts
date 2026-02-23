@@ -70,15 +70,16 @@ app.post(
 
     try {
       // Pass the request's AbortSignal so the agent stops if the client disconnects.
-      const toolCalls = await runAgent(
+      const result = await runAgent(
         prompt,
         boardState ?? [],
         c.req.raw.signal,
       );
 
       const response = AIServiceResponseSchema.parse({
-        toolCalls,
+        toolCalls: result.toolCalls,
         modelUsed: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
+        usage: result.usage,
       });
 
       return c.json(response);
