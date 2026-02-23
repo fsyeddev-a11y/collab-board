@@ -71,7 +71,8 @@
 | CB-002-F3 | Viewport windowing — tiered board state (buildTieredBoardState utility) | P0 | Implemented | 2026-02-22 |
 | CB-002-F4 | Semantic camera navigation — navigateToElements tool (5th tool in union) | P0 | Implemented | 2026-02-22 |
 | CB-002-F5 | Spatial compiler (wireframe → React+Tailwind code) | P1 | Implemented (alignSelf fix pending) | 2026-02-22 |
-| CB-002-F5-hotfix | alignSelf prompt compliance fix (co-locate rules in button/input sections) | P0 | Ready for SE | 2026-02-23 |
+| CB-002-F5-hotfix | alignSelf prompt compliance fix (co-locate rules in button/input sections) | P0 | Implemented | 2026-02-23 |
+| CB-002-F6 | Zoom-to-fit on board load (viewport initialization) | P0 | Ready for SE | 2026-02-23 |
 
 ## Open Questions
 

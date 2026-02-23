@@ -415,6 +415,14 @@ export function BoardPage() {
                   isRemoteChangeRef.current = false;
                 }
               });
+
+              // Zoom to fit all loaded content so the user sees their board immediately.
+              // requestAnimationFrame ensures the store changes are rendered before zooming.
+              requestAnimationFrame(() => {
+                if (editor.getCurrentPageShapeIds().size > 0) {
+                  editor.zoomToFit({ animation: { duration: 0 } });
+                }
+              });
             }
             if (message.users) setConnectedUsers(message.users);
 
