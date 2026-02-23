@@ -67,6 +67,7 @@
 | CB-001 | Replace createElements + createDiagram with unified batchOperations tool | P0 | Deferred (latency) | 2026-02-22 |
 | CB-002 | Viewport intelligence, navigation, and spatial code generation (5 features) | P0-P1 | In Progress | 2026-02-22 |
 | CB-002-F1 | Minimap always visible (localStorage pre-seed) | P0 | Implemented | 2026-02-22 |
+| CB-002-F2 | Auto-pan/zoom to AI-created objects (smart camera behavior) | P0 | Implemented | 2026-02-22 |
 
 ## Open Questions
 
